@@ -1,7 +1,13 @@
 #!/bin/bash
 source .env
-rm -rf logs/snapshotter/*;
-rm -rf logs/local-collector/*;
+
+# cleanup logs
+rm -rf logs;
+mkdir logs;
+cd logs;
+mkdir snapshotter;
+mkdir local-collector;
+cd ..;
 
 if [ "$SNAPSHOT_CONFIG_REPO" ]; then
     echo "Found SNAPSHOT_CONFIG_REPO ${SNAPSHOT_CONFIG_REPO}";
