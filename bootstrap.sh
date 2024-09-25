@@ -17,15 +17,14 @@ fi
 
 if [ "$SNAPSHOTTER_COMPUTE_REPO" ]; then
     echo "Found SNAPSHOTTER_COMPUTE_REPO ${SNAPSHOTTER_COMPUTE_REPO}";
-    rm -rf snapshotter/modules/computes;
-    cd snapshotter/modules/;
+    rm -rf computes;
     git clone $SNAPSHOTTER_COMPUTE_REPO computes;
     cd computes;
     if [ "$SNAPSHOTTER_COMPUTE_REPO_BRANCH" ]; then
         echo "Found SNAPSHOTTER_COMPUTE_REPO_BRANCH ${SNAPSHOTTER_COMPUTE_REPO_BRANCH}";
         git checkout $SNAPSHOTTER_COMPUTE_REPO_BRANCH;
     fi
-    cd ../../../;
+    cd ../;
 fi
 
 echo "bootstrapping complete!";
