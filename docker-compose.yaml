@@ -43,8 +43,8 @@ services:
       - ./logs/snapshotter:/logs
       - ./config:/config
       - ./computes:/computes
+      - ./snapshotter:/snapshotter
       - local_cache:/home/ubuntu/local_cache/
-      - snapshotter:/snapshotter
     environment:
       - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
       - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
