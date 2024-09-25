@@ -1,6 +1,6 @@
 services:
-  snapshotter-lite-local-collector:
-    image: ghcr.io/powerloom/snapshotter-lite-local-collector:${IMAGE_TAG}
+  snapshotter-local-collector:
+    image: ${SNAPSHOTTER_COLLECTOR_IMAGE}
     profiles: ["local-collector"]
     expose:
       - ${LOCAL_COLLECTOR_PORT}
@@ -8,6 +8,7 @@ services:
       - ${LOCAL_COLLECTOR_PORT}:${LOCAL_COLLECTOR_PORT}
     volumes:
       - ./shared-volume:/keys
+      - ./logs/local-collector:/root/.pm2/logs
     environment:
       - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
       - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
@@ -27,9 +28,8 @@ services:
       bash -c  "bash server_autofill.sh && bash init_processes.sh"
     networks:
       - custom_network
-
   snapshotter-lite-v2:
-    image: ghcr.io/powerloom/snapshotter-lite-v2:${IMAGE_TAG}
+    image: ${SNAPSHOTTER_IMAGE}
     expose:
       - ${CORE_API_PORT}
     ports:
@@ -38,7 +38,7 @@ services:
       - "ipfs"
       - "redis"
       - "rabbitmq"
-      - "snapshotter-lite-local-collector"
+      - "snapshotter-local-collector"
     volumes:
       - ./logs:/logs
       - local_cache:/home/ubuntu/local_cache/
@@ -60,6 +60,9 @@ services:
       - NAMESPACE=$NAMESPACE
       - TELEGRAM_REPORTING_URL=$TELEGRAM_REPORTING_URL
       - TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s
@@ -67,7 +70,7 @@ services:
       retries: 3
       start_period: 30s
     command:
-      bash -c "bash snapshotter_autofill.sh && bash init_docker.sh"
+      bash -c "bash snapshotter_autofill.sh && bash init_processes.sh"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -77,22 +80,38 @@ services:
     profiles: ["ipfs"]
     environment:
       - IPFS_PROFILE=server
+      - DATA_CLEANUP_DAYS=3
+      - CLEANUP_SCHEDULE=0 * * * *
     entrypoint: >
-      /bin/sh -c "
-      echo 'adding cronjob';
+      /bin/sh -c '
+      echo "Setting up data cleanup cron job...";
       mkdir -p /var/spool/cron/crontabs;
-      croncmd=\"cd /data/ipfs && find . -type f -mtime +7 -name \\"*.data\\" | xargs rm -f 2>&1\";
-      cronjob=\"0 * * * * $$croncmd\";
-      ( crontab -l | grep -v -F \"$$croncmd\" ; echo \"$$cronjob\" ) | crontab -;
-      echo 'starting ipfs';
-      /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true --agent-version-suffix=docker;
-      "
-    #command:
-    #   ["daemon", "--migrate=true", "--agent-version-suffix=docker"]
-    restart: on-failure
+      cleanup_cmd="date && echo \"Starting hourly cleanup process...\" && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name \"*.data\" -print -delete && echo \"Hourly cleanup process completed.\"";
+      echo "$${CLEANUP_SCHEDULE} $${cleanup_cmd} >> /proc/1/fd/1 2>&1" > /var/spool/cron/crontabs/root;
+      chmod 0644 /var/spool/cron/crontabs/root;
+
+      echo "Cron job set up. Will clean files older than $${DATA_CLEANUP_DAYS} days every hour ($${CLEANUP_SCHEDULE})";
+
+      echo "Starting cron daemon...";
+      crond;
+
+      echo "Starting IPFS daemon...";
+      exec /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true --agent-version-suffix=docker
+      '
+    volumes:
+      - ipfs_data:/data/ipfs
+    ports:
+      - "4001:4001"  # Swarm listening port
+      - "5002:5001"  # API server
+      - "8080:8080"  # Gateway
+    healthcheck:
+      test: ["CMD", "ipfs", "id"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
     networks:
       - custom_network
-
   redis:
     command: redis-server --appendonly yes
     image: "redis:alpine"
@@ -134,3 +153,8 @@ networks:
     ipam:
       config:
         - subnet: ${DOCKER_NETWORK_SUBNET}
+volumes:
+  ipfs_data:
+    name: ipfs_data
+  local_cache:
+    name: local_cache

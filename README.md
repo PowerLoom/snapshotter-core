@@ -732,7 +732,7 @@ https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990
         "projectId": "pairContract_trade_volume"
       },
       "processor": {
-        "module": "snapshotter.modules.computes.aggregate.single_uniswap_trade_volume_24h",
+        "module": "computes.aggregate.single_uniswap_trade_volume_24h",
         "class_name": "AggregateTradeVolumeProcessor"
       }
     }
