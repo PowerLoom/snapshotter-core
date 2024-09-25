@@ -104,7 +104,7 @@ async def get_eth_price_usd(
         )
 
         # Calculate ETH price for each block
-        for block_num, block_count in enumerate(range(from_block, to_block + 1), start=0):
+        for block_count, block_num in enumerate(range(from_block, to_block + 1), start=0):
             # Calculate prices for each pair
             dai_price = calculate_token_price(dai_eth_pair_reserves_list[block_count], 'DAI', 'WETH')
             usdc_price = calculate_token_price(usdc_eth_pair_reserves_list[block_count], 'USDC', 'WETH')
