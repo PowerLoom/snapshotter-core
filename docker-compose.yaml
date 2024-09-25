@@ -1,11 +1,11 @@
 services:
   snapshotter-local-collector:
-    image: ${SNAPSHOTTER_COLLECTOR_IMAGE}
+    image: ${SNAPSHOTTER_COLLECTOR_IMAGE:-ghcr.io/powerloom/snapshotter-lite-local-collector:dockerify}
     profiles: ["local-collector"]
     expose:
-      - ${LOCAL_COLLECTOR_PORT}
+      - ${LOCAL_COLLECTOR_PORT:-50051}
     ports:
-      - ${LOCAL_COLLECTOR_PORT}:${LOCAL_COLLECTOR_PORT}
+      - ${LOCAL_COLLECTOR_PORT:-50051}:${LOCAL_COLLECTOR_PORT:-50051}
     volumes:
       - ./shared-volume:/keys
       - ./logs/local-collector:/root/.pm2/logs
@@ -29,11 +29,11 @@ services:
     networks:
       - custom_network
   snapshotter-core:
-    image: ${SNAPSHOTTER_IMAGE}
+    image: ${SNAPSHOTTER_IMAGE:-ghcr.io/powerloom/snapshotter-core:dockerify}
     expose:
-      - ${CORE_API_PORT}
+      - ${CORE_API_PORT:-8002}
     ports:
-      - ${CORE_API_PORT}:${CORE_API_PORT}
+      - ${CORE_API_PORT-8002}:${CORE_API_PORT-8002}
     links:
       - "ipfs"
       - "redis"
