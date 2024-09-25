@@ -17,9 +17,10 @@ from snapshotter.utils.default_logger import logger
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
 
-# setup logging
+# Setup logging
 logger = logger.bind(module='Powerloom|RedisConn')
 
+# Redis connection configuration
 REDIS_CONN_CONF = {
     'host': settings_conf.redis.host,
     'port': settings_conf.redis.port,
@@ -44,7 +45,7 @@ def construct_redis_url():
     else:
         return f'redis://{REDIS_CONN_CONF["host"]}:{REDIS_CONN_CONF["port"]}/{REDIS_CONN_CONF["db"]}'
 
-# ref https://github.com/redis/redis-py/issues/936
+# Reference: https://github.com/redis/redis-py/issues/936
 
 
 async def get_aioredis_pool(pool_size=200):
@@ -100,8 +101,15 @@ def create_redis_conn(
 def provide_redis_conn(fn):
     """
     Decorator function that provides a Redis connection object to the decorated function.
+
     If the decorated function already has a Redis connection object in its arguments or keyword arguments,
     it will be used. Otherwise, a new connection object will be created and passed to the function.
+
+    Args:
+        fn (callable): The function to be decorated.
+
+    Returns:
+        callable: The decorated function.
     """
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -127,6 +135,16 @@ def provide_redis_conn(fn):
 
 
 def provide_redis_conn_repsawning_thread(fn):
+    """
+    Decorator function that provides a Redis connection object to the decorated function
+    and handles thread respawning in case of exceptions.
+
+    Args:
+        fn (callable): The function to be decorated.
+
+    Returns:
+        callable: The decorated function.
+    """
     @wraps(fn)
     def wrapper(self, *args, **kwargs):
         arg_conn = 'redis_conn'
@@ -161,7 +179,7 @@ def provide_redis_conn_repsawning_thread(fn):
                         ),
                     )
                     continue
-                # if no exception was caught and the thread returns normally, it is the sign of a shutdown event being set
+                # If no exception was caught and the thread returns normally, it is the sign of a shutdown event being set
                 else:
                     return _
 
@@ -173,10 +191,10 @@ def provide_async_redis_conn(fn):
     Decorator function that provides an async Redis connection to the decorated function.
 
     Args:
-        fn: The function to be decorated.
+        fn (callable): The function to be decorated.
 
     Returns:
-        The decorated function.
+        callable: The decorated function.
     """
     @wraps(fn)
     async def async_redis_conn_wrapper(*args, **kwargs):
@@ -199,11 +217,10 @@ def provide_async_redis_conn_insta(fn):
     A decorator function that provides an async Redis connection instance to the decorated function.
 
     Args:
-        fn: The function to be decorated.
+        fn (callable): The function to be decorated.
 
     Returns:
-        The decorated function with an async Redis connection instance.
-
+        callable: The decorated function with an async Redis connection instance.
     """
     @wraps(fn)
     async def wrapped(*args, **kwargs):
@@ -212,12 +229,14 @@ def provide_async_redis_conn_insta(fn):
             return await fn(*args, **kwargs)
         else:
             redis_cluster_mode_conn = False
+            # Commented out cluster mode check
             # try:
             #     if settings_conf.redis.cluster_mode:
             #         redis_cluster_mode_conn = True
             # except:
             #     pass
             if redis_cluster_mode_conn:
+                # Commented out cluster connection creation
                 # connection = await aioredis_cluster.create_redis_cluster(
                 #     startup_nodes=[(REDIS_CONN_CONF['host'], REDIS_CONN_CONF['port'])],
                 #     password=REDIS_CONN_CONF['password'],
@@ -226,7 +245,7 @@ def provide_async_redis_conn_insta(fn):
                 # )
                 pass
             else:
-                # logging.debug('Creating single connection via high level aioredis interface')
+                # Create a single connection using the high-level aioredis interface
                 connection = await aioredis.Redis(
                     host=REDIS_CONN_CONF['host'],
                     port=REDIS_CONN_CONF['port'],
@@ -240,7 +259,7 @@ def provide_async_redis_conn_insta(fn):
             except Exception:
                 raise
             finally:
-                try:  # ignore residual errors
+                try:  # Ignore residual errors
                     await connection.close()
                 except:
                     pass
@@ -249,6 +268,10 @@ def provide_async_redis_conn_insta(fn):
 
 
 class RedisPoolCache:
+    """
+    A class that manages a Redis connection pool cache.
+    """
+
     def __init__(self, pool_size=2000):
         """
         Initializes a Redis connection object with the specified connection pool size.

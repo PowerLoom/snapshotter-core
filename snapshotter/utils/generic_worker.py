@@ -70,6 +70,9 @@ from snapshotter.utils.transaction_utils import write_transaction
 
 
 class EIPRequest(EIP712Struct):
+    """
+    Represents an EIP712 structured request for snapshot submission.
+    """
     slotId = Uint()
     deadline = Uint()
     snapshotCid = String()
@@ -94,6 +97,15 @@ def web3_storage_retry_state_callback(retry_state: tenacity.RetryCallState):
 
 
 def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
+    """
+    Callback function to handle retry attempts for snapshot submission.
+
+    Args:
+        retry_state (tenacity.RetryCallState): The current state of the retry call.
+
+    Returns:
+        None
+    """
     if retry_state.attempt_number >= 3:
         logger.error(
             'Txn signing worker failed after 3 attempts | Txn payload: {} | Signer: {}', retry_state.kwargs['txn_payload'], retry_state.kwargs['signer_in_use'].address
@@ -101,9 +113,7 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
     else:
         if retry_state.outcome.failed:
             if 'nonce' in str(retry_state.outcome.exception()):
-                # reassigning the signer object to ensure nonce is reset
-                # basically retry_state.args[0] accesses the self object. 
-                # self._signer is the signer object
+                # Reassigning the signer object to ensure nonce is reset
                 retry_state.kwargs['signer_in_use'] = retry_state.args[0]._signer  
                 logger.warning(
                     'Tx signing worker attempt number {} result {} failed with nonce exception | Reset nonce and reassigned signer object: {} with nonce {} | Txn payload: {}',
@@ -119,7 +129,6 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
             'Tx signing worker {} attempt number {} result {} | Txn payload: {}', 
             retry_state.kwargs['signer_in_use'].address, retry_state.attempt_number, retry_state.outcome,
             retry_state.kwargs['txn_payload'],
-
         )
 
 
@@ -139,26 +148,9 @@ def ipfs_upload_retry_state_callback(retry_state: tenacity.RetryCallState):
         )
 
 class GenericAsyncWorker(multiprocessing.Process):
-    _async_transport: AsyncHTTPTransport
-    _rmq_connection_pool: Pool
-    _rmq_channel_pool: Pool
-    _aioredis_pool: RedisPoolCache
-    _redis_conn: aioredis.Redis
-    _rpc_helper: RpcHelper
-    _anchor_rpc_helper: RpcHelper
-    _httpx_client: AsyncClient
-    _web3_storage_upload_transport: AsyncHTTPTransport
-    _web3_storage_upload_client: AsyncClient
-    _chain_id: int
-    _epoch_size: int
-    _source_chain_block_time: int
-    _submission_window: int
-    _signer: SnapshotSubmissionSignerState
-    _signer_private_key: str
-    _signer_nonce: int
-    _signer_address: str
-    _grpc_channel: Channel
-    _grpc_stub: SubmissionStub
+    """
+    A generic asynchronous worker class for handling various tasks related to snapshot processing and submission.
+    """
 
     def __init__(self, name, signer_idx, **kwargs):
         """
@@ -166,6 +158,7 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         Args:
             name (str): The name of the worker.
+            signer_idx (int): The index of the signer to use from the list in settings.
             **kwargs: Additional keyword arguments to pass to the superclass constructor.
         """
         self._core_rmq_consumer: asyncio.Task
@@ -175,8 +168,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         super(GenericAsyncWorker, self).__init__(name=name, **kwargs)
         self._protocol_state_contract = None
         self._qos = 1
-        # this acts as the index of the signer to use from the list in settings for self submission
-        # this is not implemented in regular full nodes and will be implemented in the future in fallback full nodes
         self._signer_index = signer_idx
         self._rate_limiting_lua_scripts = None
 
@@ -227,7 +218,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             HTTPError: If the upload fails.
         """
         web3_storage_settings = settings.web3storage
-        # if no api token is provided, skip
+        # If no API token is provided, skip
         if not web3_storage_settings.api_token:
             return
         files = {'file': snapshot}
@@ -260,6 +251,19 @@ class GenericAsyncWorker(multiprocessing.Process):
         return snapshot_cid
 
     async def generate_signature(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
+        """
+        Generates a signature for the snapshot submission request.
+
+        Args:
+            snapshot_cid (str): The CID of the snapshot.
+            epoch_id (int): The epoch ID.
+            project_id (str): The project ID.
+            slot_id (int, optional): The slot ID. Defaults to None.
+            private_key (str, optional): The private key to use for signing. Defaults to None.
+
+        Returns:
+            tuple: A tuple containing the request, signature, and current block hash.
+        """
         current_block = await self._anchor_rpc_helper.eth_get_block()
         current_block_number = int(current_block['number'], 16)
         current_block_hash = current_block['hash']
@@ -317,8 +321,8 @@ class GenericAsyncWorker(multiprocessing.Process):
         Returns:
             None
         """
-        # payload commit sequence begins
-        # upload to IPFS
+        # Payload commit sequence begins
+        # Upload to IPFS
         snapshot_json = json.dumps(snapshot.dict(by_alias=True), sort_keys=True, separators=(',', ':'))
         snapshot_bytes = snapshot_json.encode('utf-8')
         try:
@@ -340,7 +344,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                 client=self._client, message=notification_message,
             )
         else:
-            # add to zset of unfinalized snapshot CIDs
+            # Add to zset of unfinalized snapshot CIDs
             unfinalized_entry = UnfinalizedSnapshot(
                 snapshotCid=snapshot_cid,
                 snapshot=snapshot.dict(by_alias=True),
@@ -349,7 +353,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                 name=submitted_unfinalized_snapshot_cids(project_id),
                 mapping={unfinalized_entry.json(sort_keys=True): epoch.epochId},
             )
-            # publish snapshot submitted event to event detector queue
+            # Publish snapshot submitted event to event detector queue
             snapshot_submitted_message = PowerloomSnapshotSubmittedMessage(
                 snapshotCid=snapshot_cid,
                 epochId=epoch.epochId,
@@ -386,6 +390,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                 )
 
             try:
+                # Remove old unfinalized snapshots
                 await self._redis_conn.zremrangebyscore(
                     name=submitted_unfinalized_snapshot_cids(project_id),
                     min='-inf',
@@ -423,7 +428,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                     },
                 )
 
-        # upload to web3 storage
+        # Upload to web3 storage
         if storage_flag:
             asyncio.ensure_future(self._upload_web3_storage(snapshot_bytes))
           
@@ -461,7 +466,8 @@ class GenericAsyncWorker(multiprocessing.Process):
         """
         Callback function that is called when a message is received from RabbitMQ.
 
-        :param message: The incoming message from RabbitMQ.
+        Args:
+            message (IncomingMessage): The incoming message from RabbitMQ.
         """
         pass
 
@@ -482,8 +488,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
         await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
         await self._anchor_rpc_helper._load_async_web3_providers()
-        # self._logger.info('Anchor chain RPC helper nodes: {}', self._anchor_rpc_helper._nodes)
-        # sys.exit(1)
         self._protocol_state_contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
             address=Web3.to_checksum_address(
                 self.protocol_state_contract_address,
@@ -534,6 +538,12 @@ class GenericAsyncWorker(multiprocessing.Process):
     
     @asynccontextmanager
     async def open_stream(self):
+        """
+        Context manager for opening a gRPC stream.
+
+        Yields:
+            The opened stream.
+        """
         try:
             async with self._grpc_stub.SubmitSnapshot.open() as stream:
                 self._stream = stream
@@ -542,6 +552,9 @@ class GenericAsyncWorker(multiprocessing.Process):
             self._stream = None
 
     async def _cancel_stream(self):
+        """
+        Cancels the current gRPC stream if it exists.
+        """
         # TODO: check if this is needed
         if self._stream is not None:
             try:
@@ -552,6 +565,19 @@ class GenericAsyncWorker(multiprocessing.Process):
             self._stream = None
 
     async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
+        """
+        Sends a snapshot submission to the collector.
+
+        Args:
+            snapshot_cid (str): The CID of the snapshot.
+            epoch_id (int): The epoch ID.
+            project_id (str): The project ID.
+            slot_id (int, optional): The slot ID. Defaults to None.
+            private_key (str, optional): The private key to use for signing. Defaults to None.
+
+        Raises:
+            Exception: If failed to send the message.
+        """
         self._logger.debug(
             'Sending submission to collector...',
         )
@@ -590,7 +616,16 @@ class GenericAsyncWorker(multiprocessing.Process):
         retry=retry_if_exception_type(Exception),
     )
     async def send_message(self, msg, simulation=False):
+        """
+        Sends a message to the collector, either as a simulation or a real submission.
 
+        Args:
+            msg (SnapshotSubmission): The message to send.
+            simulation (bool, optional): Whether this is a simulation. Defaults to False.
+
+        Raises:
+            Exception: If failed to send the message.
+        """
         if simulation:
             async with self._grpc_stub.SubmitSnapshotSimulation.open() as stream:
                 try:
@@ -618,6 +653,9 @@ class GenericAsyncWorker(multiprocessing.Process):
                 raise Exception(f'Failed to send message: {e}')
 
     async def _init_grpc(self):
+        """
+        Initializes the gRPC channel and stub for communication with the collector.
+        """
         self._grpc_channel = Channel(
             host='host.docker.internal',
             port=settings.local_collector_port,
@@ -628,6 +666,9 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._cancel_task = None
 
     async def _init_protocol_meta(self):
+        """
+        Initializes protocol metadata including source chain block time, epoch size, and snapshot submission window.
+        """
         # TODO: combine these into a single call
         self._protocol_abi = read_json_file(settings.protocol_state.abi)
         try:

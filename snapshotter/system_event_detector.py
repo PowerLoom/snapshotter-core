@@ -74,34 +74,28 @@ def rabbitmq_and_redis_cleanup(fn):
 
 
 class EventDetectorProcess(multiprocessing.Process):
+    """
+    A class for detecting system events using RabbitMQ and Redis.
+
+    Attributes:
+        _rabbitmq_thread (threading.Thread): The RabbitMQ thread.
+        _rabbitmq_queue (queue.Queue): The RabbitMQ queue.
+        _redis_conn (aioredis.Redis): The Redis connection.
+        _redis_pool (RedisPoolCache): The Redis connection pool.
+    """
+
     _rabbitmq_thread: threading.Thread
     _rabbitmq_queue: queue.Queue
     _redis_conn: aioredis.Redis
     _redis_pool: RedisPoolCache
+
     def __init__(self, name, **kwargs):
         """
-        Initializes the SystemEventDetector class.
+        Initializes the EventDetectorProcess class.
 
         Args:
             name (str): The name of the process.
             **kwargs: Additional keyword arguments to be passed to the multiprocessing.Process class.
-
-        Attributes:
-            _rabbitmq_thread (threading.Thread): The RabbitMQ thread.
-            _rabbitmq_queue (queue.Queue): The RabbitMQ queue.
-            _shutdown_initiated (bool): A flag indicating whether shutdown has been initiated.
-            _logger (logging.Logger): The logger instance.
-            _exchange (str): The exchange name.
-            _routing_key_prefix (str): The routing key prefix.
-            _aioredis_pool (None): The aioredis pool.
-            _redis_conn (None): The redis connection.
-            _last_processed_block (None): The last processed block.
-            rpc_helper (RpcHelper): The RpcHelper instance.
-            contract_abi (dict): The contract ABI.
-            contract_address (str): The contract address.
-            contract (web3.eth.Contract): The contract instance.
-            event_sig (dict): The event signature.
-            event_abi (dict): The event ABI.
         """
         multiprocessing.Process.__init__(self, name=name, **kwargs)
         self._rabbitmq_thread: threading.Thread
@@ -132,11 +126,18 @@ class EventDetectorProcess(multiprocessing.Process):
         self._simulation_completed = False
 
     async def _wait_for_simulation_completion(self):
+        """
+        Waits for the simulation to complete by sleeping for 15 seconds at a time.
+        """
         while True:
             self._logger.info('Waiting for simulation completion...')
             await asyncio.sleep(15)
 
     async def init(self):
+        """
+        Initializes the EventDetectorProcess by waiting for local collector initialization,
+        broadcasting simulation submission, and waiting for simulation completion.
+        """
         self._logger.info('Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 15 seconds...')
         await asyncio.sleep(15)
         await self._broadcast_simulation_submission()
@@ -154,6 +155,9 @@ class EventDetectorProcess(multiprocessing.Process):
         self._simulation_completed = True
     
     async def _broadcast_simulation_submission(self):
+        """
+        Prepares and broadcasts the simulation submission event.
+        """
         self._logger.info('⏳Preparing simulation submission...')
         current_block_number = await self._source_rpc_helper.get_current_block_number()
 
@@ -234,12 +238,12 @@ class EventDetectorProcess(multiprocessing.Process):
         self._logger.info('Events detected in block range on Prost network {}-{}: {}', from_block, to_block, events)
         return events
 
-    def _interactor_wrapper(self, q: queue.Queue):  # run in a separate thread
+    def _interactor_wrapper(self, q: queue.Queue):
         """
         A wrapper method that runs in a separate thread and initializes a RabbitmqThreadedSelectLoopInteractor object.
 
         Args:
-        - q: A queue.Queue object that is used to publish messages to RabbitMQ.
+            q (queue.Queue): A queue object that is used to publish messages to RabbitMQ.
         """
         self._rabbitmq_interactor = RabbitmqThreadedSelectLoopInteractor(
             publish_queue=q,
@@ -309,7 +313,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 await asyncio.sleep(settings.rpc.polling_interval)
                 continue
 
-            # Only use redis is state is not locally present
+            # Only use redis if state is not locally present
             if not self._last_processed_block:
                 last_processed_block_data = await self._redis_conn.get(
                     event_detector_last_processed_block,
@@ -354,7 +358,6 @@ class EventDetectorProcess(multiprocessing.Process):
                     continue
 
             else:
-
                 self._logger.debug(
                     'No last processed epoch found, processing current block',
                 )
@@ -396,7 +399,7 @@ class EventDetectorProcess(multiprocessing.Process):
 
     async def _init_rpc(self):
         """
-        Initializes the RpcHelper instance.
+        Initializes the RpcHelper instances for both anchor and source chains.
         """
         await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
         await self._source_rpc_helper.init(redis_conn=self._redis_conn)
@@ -404,44 +407,50 @@ class EventDetectorProcess(multiprocessing.Process):
     @rabbitmq_and_redis_cleanup
     def run(self):
         """
-        A class for detecting system events using RabbitMQ and Redis.
+        Starts the event detection process.
 
-        Methods:
-        --------
-        run()
-            Starts the event detection process.
+        This method initializes the necessary components, sets up signal handlers,
+        starts the RabbitMQ thread, initializes RPC connections, and begins the
+        event detection loop.
         """
+        # Initialize the event loop
         self.ev_loop = asyncio.get_event_loop()
-        self.ev_loop.run_until_complete(
-            self._init_redis_pool(),
-        )
+        
+        # Initialize the Redis pool
+        self.ev_loop.run_until_complete(self._init_redis_pool())
+        
+        # Set resource limits
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,
             (settings.rlimit.file_descriptors, hard),
         )
+        
+        # Set up signal handlers
         for signame in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signame, self._generic_exit_handler)
+        
+        # Start the RabbitMQ thread
         self._rabbitmq_thread = threading.Thread(
             target=self._interactor_wrapper,
             kwargs={'q': self._rabbitmq_queue},
         )
         self._rabbitmq_thread.start()
-        self.ev_loop.run_until_complete(
-            self._init_rpc(),
-        )
-        self.ev_loop.run_until_complete(
-            self.init()
-        )
+        
+        # Initialize RPC connections
+        self.ev_loop.run_until_complete(self._init_rpc())
+        
+        # Initialize the event detector
+        self.ev_loop.run_until_complete(self.init())
 
+        # Check if simulation is completed
         if not self._simulation_completed:
             self._logger.info('Simulation not completed after polling period. Exiting...')
             sys.exit(1)
         
+        # Set up the contract and event ABIs
         self.contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
-            address=Web3.to_checksum_address(
-                self.contract_address,
-            ),
+            address=Web3.to_checksum_address(self.contract_address),
             abi=self.contract_abi,
         )
         EVENTS_ABI = {
@@ -458,6 +467,5 @@ class EventDetectorProcess(multiprocessing.Process):
             EVENTS_ABI,
         )
 
-        self.ev_loop.run_until_complete(
-            self._detect_events(),
-        )
+        # Start the event detection loop
+        self.ev_loop.run_until_complete(self._detect_events())

@@ -20,6 +20,7 @@ DAI_WETH_PAIR = '0xa478c2975ab1ea89e8196811f51a7b7ade33eb11'
 USDC_WETH_PAIR = '0xb4e16d0168e52d35cacd2c6185b44281ec28c9dc'
 USDT_WETH_PAIR = '0x0d4a11d5eeaac28ec3f61d100daf4d40471f1852'
 
+# Token decimals for price calculations
 TOKENS_DECIMALS = {
     'USDT': 6,
     'DAI': 18,
@@ -27,7 +28,7 @@ TOKENS_DECIMALS = {
     'WETH': 18,
 }
 
-# LOAD ABIs
+# Load pair contract ABI
 pair_contract_abi = read_json_file(
     settings.pair_contract_abi,
     snapshot_util_logger,
@@ -51,35 +52,32 @@ async def get_eth_price_usd(
 
     Returns:
         dict: A dictionary containing the ETH price in USD for each block in the given range.
+
+    Raises:
+        Exception: If there's an error fetching the ETH price.
     """
     try:
         eth_price_usd_dict = dict()
         redis_cache_mapping = dict()
 
+        # Check if prices are already cached in Redis
         cached_price_dict = await redis_conn.zrangebyscore(
             name=uniswap_eth_usd_price_zset,
             min=int(from_block),
             max=int(to_block),
         )
-        if cached_price_dict and len(cached_price_dict) == to_block - (
-            from_block - 1
-        ):
+        if cached_price_dict and len(cached_price_dict) == to_block - (from_block - 1):
+            # If all prices are cached, return them
             price_dict = {
-                json.loads(
-                    price.decode(
-                        'utf-8',
-                    ),
-                )[
-                    'blockHeight'
-                ]: json.loads(price.decode('utf-8'))['price']
+                json.loads(price.decode('utf-8'))['blockHeight']: 
+                json.loads(price.decode('utf-8'))['price']
                 for price in cached_price_dict
             }
             return price_dict
 
         pair_abi_dict = get_contract_abi_dict(pair_contract_abi)
 
-        # NOTE: We can further optimize below call by batching them all,
-        # but that would be a large batch call for RPC node
+        # Fetch reserves for each pair across the block range
         dai_eth_pair_reserves_list = await rpc_helper.batch_eth_call_on_block_range(
             abi_dict=pair_abi_dict,
             function_name='getReserves',
@@ -105,48 +103,26 @@ async def get_eth_price_usd(
             redis_conn=redis_conn,
         )
 
-        block_count = 0
-        for block_num in range(from_block, to_block + 1):
-            dai_eth_pair_dai_reserve = (
-                dai_eth_pair_reserves_list[block_count][0] /
-                10 ** TOKENS_DECIMALS['DAI']
-            )
-            dai_eth_pair_eth_reserve = (
-                dai_eth_pair_reserves_list[block_count][1] /
-                10 ** TOKENS_DECIMALS['WETH']
-            )
-            dai_price = dai_eth_pair_dai_reserve / dai_eth_pair_eth_reserve
+        # Calculate ETH price for each block
+        for block_count, block_num in enumerate(range(from_block, to_block + 1), start=0):
+            # Calculate prices for each pair
+            dai_price = calculate_token_price(dai_eth_pair_reserves_list[block_count], 'DAI', 'WETH')
+            usdc_price = calculate_token_price(usdc_eth_pair_reserves_list[block_count], 'USDC', 'WETH')
+            usdt_price = calculate_token_price(eth_usdt_pair_reserves_list[block_count], 'USDT', 'WETH', reverse=True)
 
-            usdc_eth_pair_usdc_reserve = (
-                usdc_eth_pair_reserves_list[block_count][0] /
-                10 ** TOKENS_DECIMALS['USDC']
-            )
-            usdc_eth_pair_eth_reserve = (
-                usdc_eth_pair_reserves_list[block_count][1] /
-                10 ** TOKENS_DECIMALS['WETH']
-            )
-            usdc_price = usdc_eth_pair_usdc_reserve / usdc_eth_pair_eth_reserve
-
-            usdt_eth_pair_usdt_reserve = (
-                eth_usdt_pair_reserves_list[block_count][1] /
-                10 ** TOKENS_DECIMALS['USDT']
-            )
-            usdt_eth_pair_eth_reserve = (
-                eth_usdt_pair_reserves_list[block_count][0] /
-                10 ** TOKENS_DECIMALS['WETH']
-            )
-            usdt_price = usdt_eth_pair_usdt_reserve / usdt_eth_pair_eth_reserve
-
+            # Calculate total ETH liquidity
             total_eth_liquidity = (
-                dai_eth_pair_eth_reserve +
-                usdc_eth_pair_eth_reserve +
-                usdt_eth_pair_eth_reserve
+                dai_eth_pair_reserves_list[block_count][1] / 10 ** TOKENS_DECIMALS['WETH'] +
+                usdc_eth_pair_reserves_list[block_count][1] / 10 ** TOKENS_DECIMALS['WETH'] +
+                eth_usdt_pair_reserves_list[block_count][0] / 10 ** TOKENS_DECIMALS['WETH']
             )
 
-            daiWeight = dai_eth_pair_eth_reserve / total_eth_liquidity
-            usdcWeight = usdc_eth_pair_eth_reserve / total_eth_liquidity
-            usdtWeight = usdt_eth_pair_eth_reserve / total_eth_liquidity
+            # Calculate weights for each pair
+            daiWeight = (dai_eth_pair_reserves_list[block_count][1] / 10 ** TOKENS_DECIMALS['WETH']) / total_eth_liquidity
+            usdcWeight = (usdc_eth_pair_reserves_list[block_count][1] / 10 ** TOKENS_DECIMALS['WETH']) / total_eth_liquidity
+            usdtWeight = (eth_usdt_pair_reserves_list[block_count][0] / 10 ** TOKENS_DECIMALS['WETH']) / total_eth_liquidity
 
+            # Calculate weighted average ETH price
             eth_price_usd = (
                 daiWeight * dai_price +
                 usdcWeight * usdc_price +
@@ -159,9 +135,8 @@ async def get_eth_price_usd(
                     {'blockHeight': block_num, 'price': float(eth_price_usd)},
                 )
             ] = int(block_num)
-            block_count += 1
 
-        # cache price at height
+        # Cache prices and prune old data
         source_chain_epoch_size = int(await redis_conn.get(source_chain_epoch_size_key()))
         await asyncio.gather(
             redis_conn.zadd(
@@ -184,6 +159,24 @@ async def get_eth_price_usd(
         raise err
 
 
+def calculate_token_price(reserves, token0, token1, reverse=False):
+    """
+    Calculate the price of token0 in terms of token1 based on the reserves.
+
+    Args:
+        reserves (list): List of reserves [reserve0, reserve1, timestamp]
+        token0 (str): The first token in the pair
+        token1 (str): The second token in the pair
+        reverse (bool): If True, calculate price of token1 in terms of token0
+
+    Returns:
+        float: The calculated price
+    """
+    reserve0 = reserves[0] / 10 ** TOKENS_DECIMALS[token0]
+    reserve1 = reserves[1] / 10 ** TOKENS_DECIMALS[token1]
+    return reserve1 / reserve0 if reverse else reserve0 / reserve1
+
+
 async def get_block_details_in_block_range(
     from_block,
     to_block,
@@ -201,55 +194,48 @@ async def get_block_details_in_block_range(
 
     Returns:
         dict: A dictionary containing block details for each block number in the given range.
+
+    Raises:
+        Exception: If there's an error fetching the block details.
     """
     try:
+        # Check if block details are already cached in Redis
         cached_details = await redis_conn.zrangebyscore(
             name=cached_block_details_at_height,
             min=int(from_block),
             max=int(to_block),
         )
 
-        # check if we have cached value for each block number
-        if cached_details and len(cached_details) == to_block - (
-            from_block - 1
-        ):
+        # If all block details are cached, return them
+        if cached_details and len(cached_details) == to_block - (from_block - 1):
             cached_details = {
-                json.loads(
-                    block_detail.decode(
-                        'utf-8',
-                    ),
-                )[
-                    'number'
-                ]: json.loads(block_detail.decode('utf-8'))
+                json.loads(block_detail.decode('utf-8'))['number']: 
+                json.loads(block_detail.decode('utf-8'))
                 for block_detail in cached_details
             }
             return cached_details
 
+        # Fetch block details from RPC if not cached
         rpc_batch_block_details = await rpc_helper.batch_eth_get_block(from_block, to_block, redis_conn)
 
-        rpc_batch_block_details = (
-            rpc_batch_block_details if rpc_batch_block_details else []
-        )
+        rpc_batch_block_details = rpc_batch_block_details if rpc_batch_block_details else []
 
         block_details_dict = dict()
         redis_cache_mapping = dict()
 
-        block_num = from_block
-        for block_details in rpc_batch_block_details:
+        # Process and format block details
+        for block_num, block_details in enumerate(rpc_batch_block_details, start=from_block):
             block_details = block_details.get('result')
-            # right now we are just storing timestamp out of all block details,
-            # edit this if you want to store something else
-            block_details = {
+            formatted_details = {
                 'timestamp': int(block_details.get('timestamp', None), 16),
                 'number': int(block_details.get('number', None), 16),
                 'transactions': block_details.get('transactions', []),
             }
 
-            block_details_dict[block_num] = block_details
-            redis_cache_mapping[json.dumps(block_details)] = int(block_num)
-            block_num += 1
+            block_details_dict[block_num] = formatted_details
+            redis_cache_mapping[json.dumps(formatted_details)] = int(block_num)
 
-        # add new block details and prune all block details older than latest 3 epochs
+        # Cache new block details and prune old ones
         source_chain_epoch_size = int(await redis_conn.get(source_chain_epoch_size_key()))
         await asyncio.gather(
             redis_conn.zadd(
@@ -283,6 +269,10 @@ async def warm_up_cache_for_snapshot_constructors(
     Warms up the cache for snapshot constructors by fetching Ethereum price and block details
     in the given block range.
 
+    This function concurrently fetches ETH prices and block details for the specified block range
+    and stores them in the cache. This helps to improve performance for subsequent snapshot
+    construction operations.
+
     Args:
         from_block (int): The starting block number.
         to_block (int): The ending block number.
@@ -291,6 +281,10 @@ async def warm_up_cache_for_snapshot_constructors(
 
     Returns:
         None
+
+    Note:
+        This function uses asyncio.gather to concurrently fetch ETH prices and block details.
+        Any exceptions raised during these operations are captured but not propagated.
     """
     await asyncio.gather(
         get_eth_price_usd(

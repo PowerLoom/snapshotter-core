@@ -20,6 +20,14 @@ from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 
 
 class DelegateAsyncWorker(GenericAsyncWorker):
+    """
+    A worker class that handles asynchronous delegate tasks.
+
+    This class extends GenericAsyncWorker to provide functionality for processing
+    delegate tasks asynchronously. It sets up RabbitMQ exchanges, initializes task mappings,
+    and handles incoming messages.
+    """
+
     def __init__(self, name, **kwargs):
         """
         Initializes a new instance of the DelegateAsyncWorker class.
@@ -30,10 +38,12 @@ class DelegateAsyncWorker(GenericAsyncWorker):
         """
         super(DelegateAsyncWorker, self).__init__(name=name, **kwargs)
         self._qos = 1
+        # Set up RabbitMQ exchange names
         self._exchange_name = f'{settings.rabbitmq.setup.delegated_worker.exchange}:Request:{settings.namespace}'
         self._response_exchange_name = f'{settings.rabbitmq.setup.delegated_worker.exchange}:Response:{settings.namespace}'
         self._delegate_task_calculation_mapping = None
         self._task_types = []
+        # Populate task types from delegate_tasks configuration
         for task in delegate_tasks:
             task_type = task.task_type
             self._task_types.append(task_type)
@@ -43,6 +53,9 @@ class DelegateAsyncWorker(GenericAsyncWorker):
     async def _processor_task(self, msg_obj: PowerloomDelegateWorkerRequestMessage):
         """
         Process a delegate task for the given message object.
+
+        This method handles the core logic of processing a delegate task, including
+        rate limiting, task computation, and error handling.
 
         Args:
             msg_obj (PowerloomDelegateWorkerRequestMessage): The message object containing the task to process.
@@ -64,13 +77,16 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             return
 
         try:
+            # Load rate limiting scripts if not already loaded
             if not self._rate_limiting_lua_scripts:
                 self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
                     self._redis_conn,
                 )
 
+            # Get the appropriate task processor
             task_processor = self._delegate_task_calculation_mapping[msg_obj.task_type]
 
+            # Compute the task
             result = await task_processor.compute(
                 msg_obj=msg_obj,
                 redis_conn=self._redis_conn,
@@ -78,6 +94,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             )
 
             self._logger.trace('got result from delegate worker compute {}', result)
+            # Send the response
             await self._send_delegate_worker_response_queue(
                 request_msg=msg_obj,
                 response_msg=result,
@@ -87,6 +104,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
                 'Exception while processing tx receipt fetch for {}: {}', msg_obj, e,
             )
 
+            # Prepare and send failure notification
             notification_message = DelegateTaskProcessorIssue(
                 instanceID=settings.instance_id,
                 issueType='DELEGATE_TASK_FAILURE',
@@ -94,7 +112,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
                 timeOfReporting=time.time(),
                 exception=json.dumps({'issueDetails': f'Error : {e}'}),
             )
-            # send failure notifications
+            # Send failure notifications
             await send_failure_notifications_async(
                 client=self._client,
                 message=notification_message,
@@ -102,7 +120,6 @@ class DelegateAsyncWorker(GenericAsyncWorker):
         finally:
             await self._redis_conn.close()
 
-    # TODO: send to delegate worker response queue
     async def _send_delegate_worker_response_queue(
         self,
         request_msg: PowerloomDelegateWorkerRequestMessage,
@@ -110,6 +127,9 @@ class DelegateAsyncWorker(GenericAsyncWorker):
     ):
         """
         Sends a response message to the delegate worker response queue.
+
+        This method handles the logic of sending the processed task result back
+        through the RabbitMQ response queue.
 
         Args:
             request_msg (PowerloomDelegateWorkerRequestMessage): The request message that triggered the response.
@@ -124,17 +144,18 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             '*', request_msg.extra['unique_id'],
         )
 
-        # send through rabbitmq
+        # Send through RabbitMQ
         try:
             async with self._rmq_channel_pool.acquire() as channel:
-                # Prepare a message to send
+                # Get the response exchange
                 delegate_workers_response_exchange = await channel.get_exchange(
-                    # request and response payloads for delegate workers are sent through the same exchange
+                    # Request and response payloads for delegate workers are sent through the same exchange
                     name=self._response_exchange_name,
                 )
+                # Prepare the message data
                 message_data = response_msg.json().encode('utf-8')
-                # Prepare a message to send
                 message = Message(message_data)
+                # Publish the message
                 await delegate_workers_response_exchange.publish(
                     message=message,
                     routing_key=response_routing_key,
@@ -165,6 +186,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             await self.init_worker()
 
         try:
+            # Parse the incoming message
             msg_obj: PowerloomDelegateWorkerRequestMessage = (
                 PowerloomDelegateWorkerRequestMessage.parse_raw(message.body)
             )
@@ -190,6 +212,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
                 e,
             )
             return
+        # Start processing the task asynchronously
         asyncio.ensure_future(self._processor_task(msg_obj=msg_obj))
 
     async def init_worker(self):
@@ -203,6 +226,9 @@ class DelegateAsyncWorker(GenericAsyncWorker):
     async def _init_delegate_task_calculation_mapping(self):
         """
         Initializes the mapping of delegate tasks to their corresponding calculation classes.
+
+        This method dynamically imports the necessary modules and classes for each delegate task
+        and creates an instance of each task processor.
         """
         if self._delegate_task_calculation_mapping is not None:
             return
@@ -211,6 +237,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
         for delegate_task in delegate_tasks:
             key = delegate_task.task_type
 
+            # Dynamically import the module and class for each delegate task
             module = importlib.import_module(delegate_task.module)
             class_ = getattr(module, delegate_task.class_name)
             self._delegate_task_calculation_mapping[key] = class_()

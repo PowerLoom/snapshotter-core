@@ -6,7 +6,7 @@ from snapshotter.utils.models.proto.snapshot_submission import submission_pb2 as
 
 
 class SubmissionStub(object):
-    """Missing associated documentation comment in .proto file."""
+    """Client-side interface for the Submission service."""
 
     def __init__(self, channel):
         """Constructor.
@@ -27,22 +27,44 @@ class SubmissionStub(object):
 
 
 class SubmissionServicer(object):
-    """Missing associated documentation comment in .proto file."""
+    """Server-side interface for the Submission service."""
 
     def SubmitSnapshotSimulation(self, request_iterator, context):
-        """Missing associated documentation comment in .proto file."""
+        """Handle incoming SubmitSnapshotSimulation requests.
+
+        Args:
+            request_iterator: An iterator of SnapshotSubmission messages.
+            context: The RPC context.
+
+        Raises:
+            NotImplementedError: This method needs to be implemented.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def SubmitSnapshot(self, request_iterator, context):
-        """Missing associated documentation comment in .proto file."""
+        """Handle incoming SubmitSnapshot requests.
+
+        Args:
+            request_iterator: An iterator of SnapshotSubmission messages.
+            context: The RPC context.
+
+        Raises:
+            NotImplementedError: This method needs to be implemented.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
 def add_SubmissionServicer_to_server(servicer, server):
+    """Register the SubmissionServicer with a gRPC server.
+
+    Args:
+        servicer: The SubmissionServicer instance.
+        server: The gRPC server to which the servicer should be added.
+    """
     rpc_method_handlers = {
             'SubmitSnapshotSimulation': grpc.stream_stream_rpc_method_handler(
                     servicer.SubmitSnapshotSimulation,
@@ -60,9 +82,9 @@ def add_SubmissionServicer_to_server(servicer, server):
     server.add_generic_rpc_handlers((generic_handler,))
 
 
- # This class is part of an EXPERIMENTAL API.
+# This class is part of an EXPERIMENTAL API.
 class Submission(object):
-    """Missing associated documentation comment in .proto file."""
+    """Interface containing the methods of the Submission service."""
 
     @staticmethod
     def SubmitSnapshotSimulation(request_iterator,
@@ -75,6 +97,23 @@ class Submission(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
+        """Submit a snapshot simulation.
+
+        Args:
+            request_iterator: An iterator of SnapshotSubmission messages.
+            target: The server address.
+            options: An optional list of key-value pairs (channel args in gRPC runtime).
+            channel_credentials: A ChannelCredentials instance.
+            call_credentials: A CallCredentials instance.
+            insecure: A boolean indicating whether the channel should be secure.
+            compression: An optional grpc.Compression value.
+            wait_for_ready: An optional boolean indicating whether the RPC should wait for the server to be ready.
+            timeout: An optional duration of time in seconds.
+            metadata: An optional sequence of metadata pairs.
+
+        Returns:
+            A generator of SubmissionResponse messages.
+        """
         return grpc.experimental.stream_stream(request_iterator, target, '/submission.Submission/SubmitSnapshotSimulation',
             snapshotter_dot_utils_dot_models_dot_proto_dot_snapshot__submission_dot_submission__pb2.SnapshotSubmission.SerializeToString,
             snapshotter_dot_utils_dot_models_dot_proto_dot_snapshot__submission_dot_submission__pb2.SubmissionResponse.FromString,
@@ -92,6 +131,23 @@ class Submission(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
+        """Submit a snapshot.
+
+        Args:
+            request_iterator: An iterator of SnapshotSubmission messages.
+            target: The server address.
+            options: An optional list of key-value pairs (channel args in gRPC runtime).
+            channel_credentials: A ChannelCredentials instance.
+            call_credentials: A CallCredentials instance.
+            insecure: A boolean indicating whether the channel should be secure.
+            compression: An optional grpc.Compression value.
+            wait_for_ready: An optional boolean indicating whether the RPC should wait for the server to be ready.
+            timeout: An optional duration of time in seconds.
+            metadata: An optional sequence of metadata pairs.
+
+        Returns:
+            A SubmissionResponse message.
+        """
         return grpc.experimental.stream_unary(request_iterator, target, '/submission.Submission/SubmitSnapshot',
             snapshotter_dot_utils_dot_models_dot_proto_dot_snapshot__submission_dot_submission__pb2.SnapshotSubmission.SerializeToString,
             snapshotter_dot_utils_dot_models_dot_proto_dot_snapshot__submission_dot_submission__pb2.SubmissionResponse.FromString,
