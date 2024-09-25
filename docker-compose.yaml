@@ -41,6 +41,8 @@ services:
       - "snapshotter-local-collector"
     volumes:
       - ./logs:/logs
+      - ./config:/config
+      - ./computes:/computes
       - local_cache:/home/ubuntu/local_cache/
     environment:
       - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
@@ -70,7 +72,7 @@ services:
       retries: 3
       start_period: 30s
     command:
-      bash -c "bash snapshotter_autofill.sh && bash init_processes.sh"
+      bash -c "bash bootstrap.sh && bash snapshotter_autofill.sh && bash init_processes.sh"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
