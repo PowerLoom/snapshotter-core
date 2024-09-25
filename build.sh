@@ -50,15 +50,19 @@ if [ "$DEVMODE" = "true" ]; then
     export DOCKER_NETWORK_SUBNET="172.${SUBNET_SECOND_OCTET}.${SUBNET_THIRD_OCTET}.0/24"
 fi 
 
-if [ -z "$OVERRIDE_DEFAULTS" ] && [ "$DEVMODE" != "true" ]; then
-    echo "setting default values..."
-    export PROST_RPC_URL="https://rpc-prost1m.powerloom.io"
-    export PROTOCOL_STATE_CONTRACT="0xE88E5f64AEB483d7057645326AdDFA24A3B312DF"
-    export DATA_MARKET_CONTRACT="0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
-    export PROST_CHAIN_ID="11169"
+if [ "$DEVMODE" != "true" ]; then
+
+    if [ -z "$OVERRIDE_DEFAULTS" ]; then
+        echo "setting default values..."
+        export PROST_RPC_URL="https://rpc-prost1m.powerloom.io"
+        export PROTOCOL_STATE_CONTRACT="0xE88E5f64AEB483d7057645326AdDFA24A3B312DF"
+        export DATA_MARKET_CONTRACT="0x0C2E22fe7526fAeF28E7A58c84f8723dEFcE200c"
+        export PROST_CHAIN_ID="11169"
+    fi
+
     export DOCKER_NETWORK_NAME="snapshotter-core-${SLOT_ID}"
     export DOCKER_NETWORK_SUBNET="172.${SUBNET_SECOND_OCTET}.${SUBNET_THIRD_OCTET}.0/24"
-    
+
     # Test function for subnet calculation
     test_subnet_calculation() {
         local test_slot_id=$1
