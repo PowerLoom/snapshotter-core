@@ -212,7 +212,7 @@ def init_callback_queue(
         routing_key=routing_key_pattern,
     )
 
-
+    # Signing worker queue
 def init_commit_payload_queue(
     ch: pika.adapters.blocking_connection.BlockingChannel,
 ) -> None:

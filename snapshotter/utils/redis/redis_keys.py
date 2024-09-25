@@ -51,7 +51,6 @@ def project_finalized_data_zset(project_id):
 
 # project first epoch hashmap
 
-
 def project_first_epoch_hmap():
     return 'projectFirstEpoch'
 
@@ -90,7 +89,6 @@ def project_snapshotter_status_report_key(project_id):
 
 def stored_projects_key():
     return 'storedProjectIds'
-
 
 def epoch_txs_htable(epoch_id):
     return f'epochID:{epoch_id}:txReceipts'

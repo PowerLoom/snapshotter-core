@@ -9,20 +9,10 @@ from typing import Union
 import aiorwlock
 from pydantic import BaseModel
 
-from snapshotter.utils.callback_helpers import GenericPreloader
-
-
 class ProcessorWorkerDetails(BaseModel):
     unique_name: str
     pid: Union[None, int] = None
 
-
-class PreloaderAsyncFutureDetails(BaseModel):
-    obj: GenericPreloader
-    future: asyncio.Task
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class SnapshotSubmissionSignerState(BaseModel):
@@ -49,8 +39,31 @@ class SnapshotterStates(Enum):
     SNAPSHOT_SUBMIT_PAYLOAD_COMMIT = 'SNAPSHOT_SUBMIT_PAYLOAD_COMMIT'
     RELAYER_SEND = 'RELAYER_SEND'
     SNAPSHOT_FINALIZE = 'SNAPSHOT_FINALIZE'
-    SNAPSHOT_SUBMIT_RELAYER = 'SNAPSHOT_SUBMIT_RELAYER'
+    SNAPSHOT_SUBMIT_COLLECTOR = 'SNAPSHOT_SUBMIT_COLLECTOR'
 
+class SigningWorkStates(Enum):
+    PROJECT_IDS_SNAPSHOTTED = 'PROJECT_IDS_SNAPSHOTTED'  # key value update in redis
+    SLOTS_SELECTED = 'SLOTS_SELECTED'  # key value update in redis
+    PROJECT_SLOT_ASSIGNMENT = 'PROJECT_SLOT_ASSIGNMENT'  # htable update in redis
+    SLOT_COLLECTOR_SUBMISSION = 'SLOT_COLLECTOR_SUBMISSION'  # htable update in redis
+
+
+class SigningWorkProjectsSnapshottedStateItem(BaseModel):
+    projectIDs: List[str]
+
+
+class SigningWorkSlotSelectionStateItem(BaseModel):
+    timeSlot: int
+    slotIDs: List[int]
+
+class PowerloomSnapshotSignMessage(BaseModel):
+    epochId: int
+    slotId: int
+    projectIds: List[str]
+    snapshotterAddr: str
+
+class SigningWorkOverallProjectSlotAssignmentStateItem(BaseModel):
+    slotID: int
 
 class SnapshotterStateUpdate(BaseModel):
     status: str
@@ -239,3 +252,7 @@ class SnapshotBatchFinalizedEvent(EventBase):
     batchId: int
     timestamp: int
 
+class TelegramEpochProcessingReportMessage(BaseModel):
+    chatId: str
+    slotId: int
+    issue: SnapshotterIssue

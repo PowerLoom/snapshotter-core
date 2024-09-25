@@ -19,6 +19,7 @@ from redis import asyncio as aioredis
 
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
+from snapshotter.utils.models.data_models import SnapshotterIssue, TelegramEpochProcessingReportMessage
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
@@ -148,9 +149,9 @@ async def send_failure_notifications_async(client: AsyncClient, message: BaseMod
         f.add_done_callback(misc_notification_callback_result_handler)
 
 
-def send_failure_notifications_sync(client: SyncClient, message: BaseModel):
+def send_failure_notifications_sync(client: SyncClient, message: SnapshotterIssue):
     """
-    Sends failure notifications synchronously to the reporting service and/or Slack.
+    Sends failure notifications synchronously to the reporting service and/or Slack as well as Telegram.
 
     Args:
         client (SyncClient): The HTTP client to use for sending notifications.
@@ -174,7 +175,20 @@ def send_failure_notifications_sync(client: SyncClient, message: BaseModel):
             json=message.dict(),
         )
         sync_notification_callback_result_handler(f)
+    
+    if settings.reporting.telegram_url and settings.reporting.telegram_chat_id:
+        reporting_message = TelegramEpochProcessingReportMessage(
+            chatId=settings.reporting.telegram_chat_id,
+            slotId=settings.slot_id,
+            issue=message,
+        )
 
+        f = functools.partial(
+                client.post,
+                url=urljoin(settings.reporting.telegram_url, '/reportEpochProcessingIssue'),
+                json=reporting_message.dict(),
+            )
+        sync_notification_callback_result_handler(f)
 
 class GenericProcessorSnapshot(ABC):
     __metaclass__ = ABCMeta
@@ -289,3 +303,11 @@ class GenericProcessorAggregate(ABC):
         project_id: str,
     ):
         pass
+
+
+class PreloaderAsyncFutureDetails(BaseModel):
+    obj: GenericPreloader
+    future: asyncio.Task
+
+    class Config:
+        arbitrary_types_allowed = True

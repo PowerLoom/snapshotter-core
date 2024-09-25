@@ -49,7 +49,6 @@ class PowerloomSnapshotProcessMessage(EpochBase):
     genesis: Optional[bool] = False
     bulk_mode: Optional[bool] = False
 
-
 class PowerloomSnapshotFinalizedMessage(BaseModel):
     epochId: int
     projectId: str

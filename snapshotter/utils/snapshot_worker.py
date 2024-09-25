@@ -46,7 +46,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
         for project_config in projects_config:
             task_type = project_config.project_type
             self._task_types.append(task_type)
-        self._submission_window = None
 
     def _gen_project_id(self, task_type: str, data_source: Optional[str] = None, primary_data_source: Optional[str] = None):
         """
@@ -137,8 +136,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 },
             )
         else:
-
-            await self._redis_conn.set(
+            p = self._redis_conn.pipeline()
+            p.set(
                 name=submitted_base_snapshots_key(
                     epoch_id=msg_obj.epochId, project_id=project_id,
                 ),
@@ -146,7 +145,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 # block time is about 2 seconds on anchor chain, keeping it around ten times the submission window
                 ex=self._submission_window * 10 * 2,
             )
-            p = self._redis_conn.pipeline()
             p.hset(
                 name=epoch_id_project_to_state_mapping(
                     epoch_id=msg_obj.epochId, state_id=SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -320,13 +318,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 ),
             )
             return
-
-        if not self._submission_window:
-            submission_window = await self._redis_conn.get(
-                name=snapshot_submission_window_key,
-            )
-            if submission_window:
-                self._submission_window = int(submission_window)
 
         if not self._rate_limiting_lua_scripts:
             self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(

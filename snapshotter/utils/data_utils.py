@@ -10,6 +10,7 @@ from tenacity import retry
 from tenacity import retry_if_exception_type
 from tenacity import stop_after_attempt
 from tenacity import wait_random_exponential
+from web3 import Web3
 
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
@@ -68,7 +69,7 @@ async def get_project_finalized_cid(redis_conn: aioredis.Redis, state_contract_o
     if epoch_id < project_first_epoch:
         return None
 
-    # if data is present in finalzied data zset, return it
+    # if data is present in finalized data zset, return it
     cid_data = await redis_conn.zrangebyscore(
         project_finalized_data_zset(project_id),
         epoch_id,
@@ -100,8 +101,24 @@ async def w3_get_and_cache_finalized_cid(
 ):
     """
     This function retrieves the consensus status and the max snapshot CID for a given project and epoch.
-    If the consensus status is True, the CID is added to a Redis sorted set with the epoch ID as the score.
-    If the consensus status is False, a null value is added to the sorted set with the epoch ID as the score.
+    Legacy v1 protocol:
+        If the consensus status is True, the CID is added to a Redis sorted set with the epoch ID as the score.
+        If the consensus status is False, a null value is added to the sorted set with the epoch ID as the score.
+    New v2 protocol:
+        consensus status is now a return of the following struct:
+        struct ConsensusStatus {
+            SnapshotStatus status;
+            string snapshotCid;
+            uint256 timestamp;
+        } where,
+        SnapshotStatus is an enum with the following values:
+        enum SnapshotStatus {
+            PENDING,
+            FINALIZED,
+            FALLBACK_FINALIZED
+        }
+        For quicker integration with the frontend, we are adding the following changes:
+        for all the statuses, whether PENDING, FINALIZED or FALLBACK_FINALIZED, we return it as FINALIZED
 
     Args:
         redis_conn (aioredis.Redis): Redis connection object
@@ -116,14 +133,14 @@ async def w3_get_and_cache_finalized_cid(
 
     [consensus_status, cid] = await rpc_helper.web3_call(
         tasks=[
-            ('snapshotStatus', [project_id, epoch_id]),
-            ('maxSnapshotsCid', [project_id, epoch_id])
+            ('snapshotStatus', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
+            ('maxSnapshotsCid', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id])
         ],
         contract_addr=state_contract_obj.address,
         abi=state_contract_obj.abi,
     )
     logger.trace(f'consensus status for project {project_id} and epoch {epoch_id} is {consensus_status}')
-    if consensus_status[0]:
+    if consensus_status[0] is not None:
         await redis_conn.zadd(
             project_finalized_data_zset(project_id),
             {cid: epoch_id},
@@ -160,13 +177,10 @@ async def get_project_first_epoch(redis_conn: aioredis.Redis, state_contract_obj
         first_epoch = int(first_epoch_data)
         return first_epoch
     else:
-        tasks = [
-            state_contract_obj.functions.projectFirstEpochId(project_id),
-        ]
 
         [first_epoch] = await rpc_helper.web3_call(
             tasks=[
-                ('projectFirstEpochId', [project_id]),
+                ('projectFirstEpochId', [Web3.to_checksum_address(settings.data_market), project_id]),
             ],
             contract_addr=state_contract_obj.address,
             abi=state_contract_obj.abi,
@@ -325,7 +339,7 @@ async def get_source_chain_id(redis_conn: aioredis.Redis, state_contract_obj, rp
     else:
         [source_chain_id] = await rpc_helper.web3_call(
             tasks=[
-                ('SOURCE_CHAIN_ID', [])
+                ('SOURCE_CHAIN_ID', [Web3.to_checksum_address(settings.data_market)])
             ],
             contract_addr=state_contract_obj.address,
             abi=state_contract_obj.abi
@@ -351,7 +365,7 @@ async def build_projects_list_from_events(redis_conn: aioredis.Redis, state_cont
         list: List of project IDs.
     """
     EVENT_SIGS = {
-        'ProjectsUpdated': 'ProjectsUpdated(string,bool,uint256)',
+        'ProjectsUpdated': 'ProjectsUpdated(addres,string,bool,uint256)',
     }
 
     EVENT_ABI = {
@@ -359,12 +373,12 @@ async def build_projects_list_from_events(redis_conn: aioredis.Redis, state_cont
     }
 
     [start_block] = await rpc_helper.web3_call(
-        tasks=[('DeploymentBlockNumber', [])],
+        tasks=[('DeploymentBlockNumber', [Web3.to_checksum_address(settings.data_market)])],
         contract_addr=state_contract_obj.address,
         abi=state_contract_obj.abi,
     )
 
-    current_block = await rpc_helper.get_current_block_number(redis_conn)
+    current_block = await rpc_helper.get_current_block_number()
     event_sig, event_abi = get_event_sig_and_abi(EVENT_SIGS, EVENT_ABI)
 
     # from start_block to current block, get all events in batches of 1000, 10 requests parallelly
@@ -380,14 +394,11 @@ async def build_projects_list_from_events(redis_conn: aioredis.Redis, state_cont
         ):
             tasks.append(
                 rpc_helper.get_events_logs(
-                    **{
-                        'contract_address': state_contract_obj.address,
-                        'to_block': min(current_block, block_range + 1000),
-                        'from_block': block_range,
-                        'topics': [event_sig],
-                        'event_abi': event_abi,
-                        'redis_conn': redis_conn,
-                    },
+                    contract_address=Web3.to_checksum_address(settings.data_market),
+                    to_block=min(current_block, block_range + 1000),
+                    from_block=block_range,
+                    topics=[event_sig],
+                    event_abi=event_abi,
                 ),
             )
 
@@ -441,12 +452,8 @@ async def get_snapshot_submision_window(redis_conn: aioredis.Redis, state_contra
     Returns:
         submission_window (int): The snapshot submission window.
     """
-    tasks = [
-        state_contract_obj.functions.snapshotSubmissionWindow(),
-    ]
-
     [submission_window] = await rpc_helper.web3_call(
-        tasks=[('snapshotSubmissionWindow', [])],
+        tasks=[('snapshotSubmissionWindow', [Web3.to_checksum_address(settings.data_market)])],
         contract_addr=state_contract_obj.address,
         abi=state_contract_obj.abi
     )
@@ -473,8 +480,8 @@ async def get_source_chain_epoch_size(redis_conn: aioredis.Redis, state_contract
         source_chain_epoch_size = int(source_chain_epoch_size_data.decode('utf-8'))
         return source_chain_epoch_size
     else:
-        [source_chain_epoch_size] = await rpc_helper.web3_call(
-            tasks=[('EPOCH_SIZE', [])],
+        [source_chain_epoch_size, ] = await rpc_helper.web3_call(
+            tasks=[('EPOCH_SIZE', [Web3.to_checksum_address(settings.data_market)])],
             contract_addr=state_contract_obj.address,
             abi=state_contract_obj.abi
         )
@@ -506,12 +513,9 @@ async def get_source_chain_block_time(redis_conn: aioredis.Redis, state_contract
         source_chain_block_time = int(source_chain_block_time_data.decode('utf-8'))
         return source_chain_block_time
     else:
-        tasks = [
-            state_contract_obj.functions.SOURCE_CHAIN_BLOCK_TIME(),
-        ]
 
         [source_chain_block_time] = await rpc_helper.web3_call(
-            tasks=[('SOURCE_CHAIN_BLOCK_TIME', [])],
+            tasks=[('SOURCE_CHAIN_BLOCK_TIME', [Web3.to_checksum_address(settings.data_market)])],
             contract_addr=state_contract_obj.address,
             abi=state_contract_obj.abi
         )
@@ -641,6 +645,7 @@ async def get_project_epoch_snapshot_bulk(
     return all_snapshot_data
 
 
+# UNUSED
 async def get_snapshotter_status(redis_conn: aioredis.Redis):
     """
     Returns the snapshotter status for all projects.
@@ -705,6 +710,7 @@ async def get_snapshotter_status(redis_conn: aioredis.Redis):
     return overall_status
 
 
+# UNUSED
 async def get_snapshotter_project_status(redis_conn: aioredis.Redis, project_id: str, with_data: bool):
     """
     Retrieves the snapshotter project status for a given project ID.
@@ -750,6 +756,7 @@ async def get_snapshotter_project_status(redis_conn: aioredis.Redis, project_id:
     return project_status
 
 
+# UNUSED
 async def get_project_time_series_data(
         start_time: int,
         end_time: int,

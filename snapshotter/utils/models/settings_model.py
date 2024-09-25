@@ -82,7 +82,9 @@ class RabbitMQ(BaseModel):
 class ReportingConfig(BaseModel):
     slack_url: str
     service_url: str
-
+    telegram_url: str
+    telegram_chat_id: str
+    failure_report_frequency: int
 
 class Redis(BaseModel):
     host: str
@@ -111,7 +113,7 @@ class EventContract(BaseModel):
     address: str
     abi: str
     deadline_buffer: int
-
+    day_counter_buffer: int
 
 class CallbackWorkerConfig(BaseModel):
     num_snapshot_workers: int
@@ -154,9 +156,16 @@ class SignerConfig(BaseModel):
 
 
 class TxSubmissionConfig(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
     # relayer: RelayerService
     signers: List[SignerConfig] = []
+
+
+class HTTPXConfig(BaseModel):
+    pool_timeout: int
+    connect_timeout: int
+    read_timeout: int
+    write_timeout: int
 
 
 class Settings(BaseModel):
@@ -166,13 +175,15 @@ class Settings(BaseModel):
     instance_id: str
     slot_id: int
     rpc: RPCConfigFull
-    snapshot_submissions: TxSubmissionConfig
+    local_collector_port: int
     rlimit: RLimit
+    httpx: HTTPXConfig
     rabbitmq: RabbitMQ
     reporting: ReportingConfig
     redis: Redis
     redis_reader: RedisReader
     logs: Logs
+    data_market: str
     projects_config_path: str
     preloader_config_path: str
     pair_contract_abi: str
@@ -181,6 +192,7 @@ class Settings(BaseModel):
     callback_worker_config: CallbackWorkerConfig
     ipfs: IPFSConfig
     web3storage: Web3Storage
+    node_version: str
     anchor_chain_rpc: RPCConfigBase
 
 

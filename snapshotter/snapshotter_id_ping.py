@@ -33,16 +33,27 @@ async def main():
     )
     allowed_snapshotters = snapshotters_arr_query[0]
     if allowed_snapshotters is True or allowed_snapshotters:
-        print('Snapshotting allowed...')
+        print('Snapshotter identitiy found in allowed snapshotters...')
+    else:
+        print('Snapshotter identity not found in allowed snapshotters...')
+        sys.exit(1)
+    # also check slot ID mapping
+    slot_id_mapping_query = await anchor_rpc.web3_call(
+        tasks=[('slotSnapshotterMapping', [settings.slot_id])],
+        contract_addr=settings.protocol_state.address,
+        abi=protocol_abi
+    )
+    try:
+        slot_id_snapshotter_addr = Web3.to_checksum_address(slot_id_mapping_query[0])
+    except Exception as e:
+        print('Error in slot ID mapping query: ', e)
+        sys.exit(1)
+    if slot_id_snapshotter_addr == Web3.to_checksum_address(settings.instance_id):
+        print('Snapshotter identity found in slot ID mapping...')
         await redis_conn.set(
             active_status_key,
             int(True),
         )
-        sys.exit(0)
-    else:
-        print('Snapshotting not allowed...')
-        sys.exit(1)
-
 
 if __name__ == '__main__':
     asyncio.run(main())

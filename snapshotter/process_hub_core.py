@@ -20,6 +20,7 @@ import psutil
 import pydantic
 import redis
 from eth_utils.address import to_checksum_address
+from web3 import Web3
 
 from snapshotter.processor_distributor import ProcessorDistributor
 from snapshotter.settings.config import settings
@@ -477,7 +478,7 @@ class ProcessHubCore(Process):
             abi=protocol_abi,
         )
         try:
-            source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME().call()
+            source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME(Web3.to_checksum_address(settings.data_market)).call()
         except Exception as e:
             self._logger.exception(
                 'Exception in querying protocol state for source chain block time: {}',
@@ -488,7 +489,7 @@ class ProcessHubCore(Process):
             self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
 
         try:
-            epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE().call()
+            epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE(Web3.to_checksum_address(settings.data_market)).call()
         except Exception as e:
             self._logger.exception(
                 'Exception in querying protocol state for epoch size: {}',

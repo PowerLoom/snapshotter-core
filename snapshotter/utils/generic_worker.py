@@ -46,7 +46,7 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
-from snapshotter.utils.data_utils import get_source_chain_id
+from snapshotter.utils.data_utils import get_snapshot_submision_window, get_source_chain_id
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.helper_functions import aiorwlock_aqcuire_release
@@ -152,6 +152,7 @@ class GenericAsyncWorker(multiprocessing.Process):
     _chain_id: int
     _epoch_size: int
     _source_chain_block_time: int
+    _submission_window: int
     _signer: SnapshotSubmissionSignerState
     _signer_private_key: str
     _signer_nonce: int
@@ -175,6 +176,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._protocol_state_contract = None
         self._qos = 1
         # this acts as the index of the signer to use from the list in settings for self submission
+        # this is not implemented in regular full nodes and will be implemented in the future in fallback full nodes
         self._signer_index = signer_idx
         self._rate_limiting_lua_scripts = None
 
@@ -257,17 +259,14 @@ class GenericAsyncWorker(multiprocessing.Process):
         snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
         return snapshot_cid
 
-    async def generate_signature(self, snapshot_cid, epoch_id, project_id):
-        # current_block = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.block_number
-        # TODO: review if it makes sense to cache this with an LRU cache
-        current_block = await self._anchor_rpc_helper.eth_get_block(
-            redis_conn=self._redis_conn,
-        )
+    async def generate_signature(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
+        current_block = await self._anchor_rpc_helper.eth_get_block()
         current_block_number = int(current_block['number'], 16)
         current_block_hash = current_block['hash']
         deadline = current_block_number + settings.protocol_state.deadline_buffer
+        request_slot_id = settings.slot_id if not slot_id else slot_id
         request = EIPRequest(
-            slotId=settings.slot_id,
+            slotId=request_slot_id,
             deadline=deadline,
             snapshotCid=snapshot_cid,
             epochId=epoch_id,
@@ -275,13 +274,19 @@ class GenericAsyncWorker(multiprocessing.Process):
         )
 
         signable_bytes = request.signable_bytes(self._domain_separator)
-        signature = self._identity_private_key.sign_recoverable(signable_bytes, hasher=self._keccak_hash)
+        if not private_key:  # self signing
+            signature = self._identity_private_key.sign_recoverable(signable_bytes, hasher=self._keccak_hash)
+        else:
+            if private_key.startswith('0x'):
+                private_key = private_key[2:]
+            signer_private_key = PrivateKey.from_hex(private_key)
+            signature = signer_private_key.sign_recoverable(signable_bytes, hasher=self._keccak_hash)
         v = signature[64] + 27
         r = big_endian_to_int(signature[0:32])
         s = big_endian_to_int(signature[32:64])
 
         final_sig = r.to_bytes(32, 'big') + s.to_bytes(32, 'big') + v.to_bytes(1, 'big')
-        request_ = {'slotId': settings.slot_id, 'deadline': deadline, 'snapshotCid': snapshot_cid, 'epochId': epoch_id, 'projectId': project_id}
+        request_ = {'slotId': request_slot_id, 'deadline': deadline, 'snapshotCid': snapshot_cid, 'epochId': epoch_id, 'projectId': project_id}
         return request_, final_sig, current_block_hash
 
     async def _commit_payload(
@@ -388,104 +393,40 @@ class GenericAsyncWorker(multiprocessing.Process):
                 )
             except:
                 pass
-            # send to relayer dispatch queue
-            if not settings.snapshot_submissions.enabled:
-                await self._send_payload_commit_service_queue(
-                    task_type=task_type,
-                    project_id=project_id,
-                    epoch=epoch,
-                    snapshot_cid=snapshot_cid,
+
+            try:
+                await self._send_submission_to_collector(snapshot_cid, epoch.epochId, project_id)
+            except Exception as e:
+                self._logger.error(
+                    'Exception submitting snapshot to collector for epoch {}: {}, Error: {},'
+                    'sending failure notifications', epoch, snapshot, e,
+                )
+                await self._redis_conn.hset(
+                    name=epoch_id_project_to_state_mapping(
+                        epoch.epochId, SnapshotterStates.SNAPSHOT_SUBMIT_COLLECTOR.value,
+                    ),
+                    mapping={
+                        project_id: SnapshotterStateUpdate(
+                            status='failed', error=str(e), timestamp=int(time.time()),
+                        ).json(),
+                    },
                 )
             else:
-                try:
-                    await self._send_submission_to_collector(snapshot_cid, epoch.epochId, project_id)
-                except Exception as e:
-                    self._logger.error(
-                        'Exception submitting snapshot to collector for epoch {}: {}, Error: {},'
-                        'sending failure notifications', epoch, snapshot, e,
-                    )
-                    await self._redis_conn.hset(
-                        name=epoch_id_project_to_state_mapping(
-                            epoch.epochId, SnapshotterStates.SNAPSHOT_SUBMIT_RELAYER.value,
-                        ),
-                        mapping={
-                            project_id: SnapshotterStateUpdate(
-                                status='failed', error=str(e), timestamp=int(time.time()),
-                            ).json(),
-                        },
-                    )
-                else:
-                    await self._redis_conn.hset(
-                        name=epoch_id_project_to_state_mapping(
-                            epoch.epochId, SnapshotterStates.SNAPSHOT_SUBMIT_RELAYER.value,
-                        ),
-                        mapping={
-                            project_id: SnapshotterStateUpdate(
-                                status='success', timestamp=int(time.time()),
-                            ).json(),
-                        },
-                    )
+                await self._redis_conn.hset(
+                    name=epoch_id_project_to_state_mapping(
+                        epoch.epochId, SnapshotterStates.SNAPSHOT_SUBMIT_COLLECTOR.value,
+                    ),
+                    mapping={
+                        project_id: SnapshotterStateUpdate(
+                            status='success', timestamp=int(time.time()),
+                        ).json(),
+                    },
+                )
 
         # upload to web3 storage
         if storage_flag:
             asyncio.ensure_future(self._upload_web3_storage(snapshot_bytes))
-
-    @asynccontextmanager
-    async def open_stream(self):
-        if self._stream is not None:
-            yield self._stream
-        else:
-            try:
-                async with self._grpc_stub.SubmitSnapshot.open() as stream:
-                    self._stream = stream
-                    yield stream
-            except Exception as e:
-                self._stream = None
-                raise e
-
-    @retry(
-        wait=wait_random_exponential(multiplier=1, max=10),
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception_type(Exception),
-    )
-    async def send_message(self, msg):
-        try:
-            async with self.open_stream() as stream:
-                self._logger.debug(f'Sending message: {msg}')
-                await stream.send_message(msg)
-        except Exception as e:
-            if isinstance(e, grpclib.exceptions.StreamTerminatedError):
-                self._stream = None
-            self._logger.error(f'Failed to send message: {e}')
-            raise Exception(f'Failed to send message: {e}')
-        
-    async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id):
-        self._logger.debug(
-                f'Sending submission to collector...',
-            )
-        request_, signature, current_block_hash = await self.generate_signature(snapshot_cid, epoch_id, project_id)
-        request_msg = dict(
-                slotId=request_['slotId'],
-                deadline=request_['deadline'],
-                snapshotCid=request_['snapshotCid'],
-                epochId=request_['epochId'],
-                projectId=request_['projectId'],
-            )
-        self._logger.debug(
-            'Snapshot submission creation with request: {}', request_msg
-        )
-        msg = SnapshotSubmission(request=request_msg, signature=signature.hex(), header=current_block_hash)
-        self._logger.debug(
-            'Snapshot submission created: {}', msg
-        )
-
-        try:
-            await self.send_message(msg)
-        except Exception as e:
-            self._logger.opt(exception=True).error(
-                'Snapshot submission error: {}', e
-            )
-    
+          
     async def _rabbitmq_consumer(self, loop):
         """
         Consume messages from a RabbitMQ queue.
@@ -515,163 +456,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             )
             await q_obj.bind(exchange, routing_key=self._rmq_routing)
             await q_obj.consume(self._on_rabbitmq_message)
-
-    async def _send_payload_commit_service_queue(
-        self,
-        task_type: str,
-        project_id: str,
-        epoch: Union[
-            PowerloomSnapshotProcessMessage,
-            PowerloomSnapshotSubmittedMessage,
-            PowerloomCalculateAggregateMessage,
-        ],
-        snapshot_cid: str,
-    ):
-        """
-        Sends a commit payload message to the commit payload queue via RabbitMQ.
-
-        Args:
-            task_type (str): The type of task being performed.
-            project_id (str): The ID of the project.
-            epoch (Union[PowerloomSnapshotProcessMessage, PowerloomSnapshotSubmittedMessage, PowerloomCalculateAggregateMessage]): The epoch object.
-            snapshot_cid (str): The CID of the snapshot.
-
-        Raises:
-            Exception: If there is an error getting the source chain ID or sending the message to the commit payload queue.
-
-        Returns:
-            None
-        """
-        try:
-            source_chain_details = await get_source_chain_id(
-                redis_conn=self._redis_conn,
-                rpc_helper=self._anchor_rpc_helper,
-                state_contract_obj=self._protocol_state_contract,
-            )
-        except Exception as e:
-            self._logger.opt(exception=True).error(
-                'Exception getting source chain id: {}', e,
-            )
-            raise e
-        commit_payload = PayloadCommitMessage(
-            sourceChainId=source_chain_details,
-            projectId=project_id,
-            epochId=epoch.epochId,
-            snapshotCID=snapshot_cid,
-        )
-
-        # send through rabbitmq
-        try:
-            async with self._rmq_connection_pool.acquire() as connection:
-                async with self._rmq_channel_pool.acquire() as channel:
-                    # Prepare a message to send
-                    commit_payload_exchange = await channel.get_exchange(
-                        name=self._commit_payload_exchange,
-                    )
-                    message_data = commit_payload.json().encode()
-
-                    # Prepare a message to send
-                    message = Message(message_data)
-
-                    await commit_payload_exchange.publish(
-                        message=message,
-                        routing_key=self._commit_payload_routing_key,
-                    )
-
-                    self._logger.info(
-                        'Sent message to commit payload queue: {}', commit_payload,
-                    )
-
-        except Exception as e:
-            self._logger.opt(exception=True).error(
-                (
-                    'Exception committing snapshot CID {} to commit payload queue:'
-                    ' {} | dump: {}'
-                ),
-                snapshot_cid,
-                e,
-            )
-            await self._redis_conn.hset(
-                name=epoch_id_project_to_state_mapping(
-                    epoch.epochId, SnapshotterStates.SNAPSHOT_SUBMIT_PAYLOAD_COMMIT.value,
-                ),
-                mapping={
-                    project_id: SnapshotterStateUpdate(
-                        status='failed', error=str(e), timestamp=int(time.time()),
-                    ).json(),
-                },
-            )
-        else:
-            await self._redis_conn.hset(
-                name=epoch_id_project_to_state_mapping(
-                    epoch.epochId, SnapshotterStates.SNAPSHOT_SUBMIT_PAYLOAD_COMMIT.value,
-                ),
-                mapping={
-                    project_id: SnapshotterStateUpdate(
-                        status='success', timestamp=int(time.time()),
-                    ).json(),
-                },
-            )
-
-    @aiorwlock_aqcuire_release
-    @retry(
-        reraise=True,
-        retry=retry_if_exception_type(Exception),
-        wait=wait_random_exponential(multiplier=1, max=10),
-        stop=stop_after_attempt(3),
-        after=submit_snapshot_retry_callback
-    )
-    async def submit_snapshot(self, txn_payload: TxnPayload, signer_in_use: Optional[SnapshotSubmissionSignerState] = None):
-        """
-        Submit Snapshot
-        """
-        if signer_in_use is None:
-            self._logger.warning('No signer passed to submit_snapshot, quitting')
-            return None
-        _nonce = signer_in_use.nonce
-        try:
-            tx_hash = await write_transaction(
-                self._w3,
-                self._chain_id,
-                signer_in_use.address,
-                signer_in_use.private_key,
-                self._protocol_state_contract,
-                'submitSnapshot',
-                _nonce,
-                txn_payload.slotId,
-                txn_payload.snapshotCid,
-                txn_payload.epochId,
-                txn_payload.projectId,
-                (
-                    txn_payload.request.slotId, txn_payload.request.deadline,
-                    txn_payload.request.snapshotCid, txn_payload.request.epochId,
-                    txn_payload.request.projectId,
-                ),
-                txn_payload.signature,
-            )
-
-            self._logger.info(
-                f'submitted transaction with tx_hash: {tx_hash}',
-            )
-
-        except Exception as e:
-            self._logger.opt(exception=True).error(f'Exception: {e}')
-
-            if 'nonce' in str(e):
-                # sleep for 10 seconds and reset nonce
-                await asyncio.sleep(10)
-                self._signer.nonce = await self._w3.eth.get_transaction_count(
-                    signer_in_use.address,
-                )
-                self._logger.info(
-                    f'nonce for {self._signer.address} reset to: {self._signer.nonce}',
-                )
-                raise Exception('nonce error, reset nonce')
-            else:
-                raise Exception('other error, still retrying')
-        else:
-            return tx_hash
-     
+    
     async def _on_rabbitmq_message(self, message: IncomingMessage):
         """
         Callback function that is called when a message is received from RabbitMQ.
@@ -710,32 +495,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         )
 
         self._w3 = self._anchor_rpc_helper._nodes[0]['web3_client_async']
-        # web3 v5 camel case helpers
-        try:
-            self._signer_address = Web3.to_checksum_address(settings.snapshot_submissions.signers[self._signer_index].address)
-        except Exception as e:
-            # self._logger.exception(
-            #     'Exception in getting signer address. Assigning empty details to signer. Most likely we wont be signing then'
-                
-            # )
-            self._signer_address = ''
-            self._signer_private_key = ''
-            self._signer = SnapshotSubmissionSignerState(
-                address=self._signer_address,
-                private_key=self._signer_private_key,
-                nonce=0,
-                nonce_lock=aiorwlock.RWLock(fast=True),
-            )
-        else:
-            self._signer_nonce = await self._w3.eth.get_transaction_count(self._signer_address)
-            self._signer_private_key = settings.snapshot_submissions.signers[self._signer_index].private_key
-            self._signer = SnapshotSubmissionSignerState(
-                address=self._signer_address,
-                private_key=self._signer_private_key,
-                nonce=self._signer_nonce,
-                nonce_lock=aiorwlock.RWLock(fast=True),
-            )
-            self._logger.debug('Picked signer {} at index {} and nonce {} for self submission', self._signer_address, self._signer_index, self._signer_nonce)
         self._chain_id = await self._w3.eth.chain_id
         self._logger.debug('Set anchor chain ID to {}', self._chain_id)
         self._domain_separator = make_domain(
@@ -773,25 +532,110 @@ class GenericAsyncWorker(multiprocessing.Process):
             headers={'Authorization': 'Bearer ' + settings.web3storage.api_token},
         )
     
+    @asynccontextmanager
+    async def open_stream(self):
+        try:
+            async with self._grpc_stub.SubmitSnapshot.open() as stream:
+                self._stream = stream
+                yield self._stream
+        finally:
+            self._stream = None
+
+    async def _cancel_stream(self):
+        # TODO: check if this is needed
+        if self._stream is not None:
+            try:
+                await self._stream.cancel()
+            except:
+                self._logger.debug('Error cancelling stream, continuing...')
+            self._logger.debug('Stream cancelled due to inactivity.')
+            self._stream = None
+
+    async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
+        self._logger.debug(
+            'Sending submission to collector...',
+        )
+        request_, signature, current_block_hash = await self.generate_signature(snapshot_cid, epoch_id, project_id, slot_id, private_key)
+
+        request_msg = Request(
+            slotId=request_['slotId'],
+            deadline=request_['deadline'],
+            snapshotCid=request_['snapshotCid'],
+            epochId=request_['epochId'],
+            projectId=request_['projectId'],
+        )
+        self._logger.debug(
+            'Snapshot submission creation with request: {}', request_msg,
+        )
+
+        msg = SnapshotSubmission(request=request_msg, signature=signature.hex(), header=current_block_hash)
+        self._logger.debug(
+            'Snapshot submission created: {}', msg,
+        )
+
+        try:
+            if epoch_id == 0:
+                await self.send_message(msg, simulation=True)
+            else:
+                await self.send_message(msg)
+        except Exception as e:
+            self._logger.opt(
+                exception=True,
+            ).error(f'Failed to send message: {e}')
+            raise Exception(f'Failed to send message: {e}')
+
+    @retry(
+        wait=wait_random_exponential(multiplier=1, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(Exception),
+    )
+    async def send_message(self, msg, simulation=False):
+
+        if simulation:
+            async with self._grpc_stub.SubmitSnapshotSimulation.open() as stream:
+                try:
+                    await stream.send_message(msg)
+                    self._logger.debug(f'Sent simulation message: {msg}')
+
+                    response = await stream.recv_message()
+                    await stream.end()
+
+                    if response and 'Success' in response.message:
+                        self._logger.info(
+                            '✅ Simulation snapshot submitted successfully: {}!', msg,
+                        )
+                    else:
+                        raise Exception(f'Failed to send simulation snapshot, got response: {response} | type: {type(response)}')
+                except:
+                    raise Exception(f'Failed to send simulation snapshot: {msg}')
+        else:
+            try:
+                async with self.open_stream() as stream:
+                    await stream.send_message(msg)
+                    self._logger.debug(f'Sent message: {msg}')
+                    return {'status_code': 200}
+            except Exception as e:
+                raise Exception(f'Failed to send message: {e}')
+
     async def _init_grpc(self):
         self._grpc_channel = Channel(
-            host='snapshotter-lite-local-collector',
-            port=50051,
+            host='host.docker.internal',
+            port=settings.local_collector_port,
             ssl=False,
         )
         self._grpc_stub = SubmissionStub(self._grpc_channel)
         self._stream = None
+        self._cancel_task = None
 
     async def _init_protocol_meta(self):
         # TODO: combine these into a single call
         self._protocol_abi = read_json_file(settings.protocol_state.abi)
         try:
             source_block_time = await self._anchor_rpc_helper.web3_call(
-                tasks=[('SOURCE_CHAIN_BLOCK_TIME', [])],
+                tasks=[('SOURCE_CHAIN_BLOCK_TIME', [Web3.to_checksum_address(settings.data_market)])],
                 contract_addr=self.protocol_state_contract_address,
                 abi=self._protocol_abi,
             )
-            # source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME().call()
         except Exception as e:
             self._logger.exception(
                 'Exception in querying protocol state for source chain block time: {}',
@@ -803,7 +647,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
         try:
             epoch_size = await self._anchor_rpc_helper.web3_call(
-                tasks=[('EPOCH_SIZE', [])],
+                tasks=[('EPOCH_SIZE', [Web3.to_checksum_address(settings.data_market)])],
                 contract_addr=self.protocol_state_contract_address,
                 abi=self._protocol_abi,
             )
@@ -815,7 +659,20 @@ class GenericAsyncWorker(multiprocessing.Process):
         else:
             self._epoch_size = epoch_size[0]
             self._logger.debug('Set epoch size to {}', self._epoch_size)
-
+        try:
+            submission_window = await get_snapshot_submision_window(
+                redis_conn=self._redis_conn,
+                rpc_helper=self._anchor_rpc_helper,
+                state_contract_obj=self._protocol_state_contract
+            )
+        except Exception as e:
+            self._logger.exception(
+                'Exception in querying protocol state for snapshot submission window: {}',
+                e,
+            )
+        else:
+            self._submission_window = submission_window
+            self._logger.debug('Set snapshot submission window to {}', self._submission_window)
     async def init(self):
         """
         Initializes the worker by initializing the Redis pool, HTTPX client, and RPC helper.

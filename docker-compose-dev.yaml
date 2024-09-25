@@ -1,0 +1,155 @@
+services:
+  snapshotter-lite-local-collector:
+    image: snapshotter-lite-local-collector
+    expose:
+      - ${LOCAL_COLLECTOR_PORT}
+    ports:
+      - ${LOCAL_COLLECTOR_PORT}:${LOCAL_COLLECTOR_PORT}
+    volumes:
+      - ./shared-volume:/keys
+    environment:
+      - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
+      - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
+      - IPFS_URL=$IPFS_URL
+      - IPFS_API_KEY=$IPFS_API_KEY
+      - IPFS_API_SECRET=$IPFS_API_SECRET
+      - PROTOCOL_STATE_CONTRACT=$PROTOCOL_STATE_CONTRACT
+      - DATA_MARKET_CONTRACT=$DATA_MARKET_CONTRACT
+      - PROST_RPC_URL=$PROST_RPC_URL
+      - PROST_CHAIN_ID=$PROST_CHAIN_ID
+      - LOCAL_COLLECTOR_PORT=$LOCAL_COLLECTOR_PORT
+      - RELAYER_PRIVATE_KEY=$RELAYER_PRIVATE_KEY
+      - BLOCK_TIME=$BLOCK_TIME
+    command:
+      bash -c  "bash server_autofill.sh && bash init_processes.sh"
+    networks:
+      - custom_network
+
+  snapshotter-full-v2:
+    image: snapshotter-full-v2
+    expose:
+      - ${CORE_API_PORT}
+    ports:
+      - ${CORE_API_PORT}:${CORE_API_PORT}
+    links:
+      - "ipfs"
+      - "redis"
+      - "rabbitmq"
+    volumes:
+      - ./snapshotter:/snapshotter
+      - ./config:/config
+      - ./logs:/logs
+    environment:
+      - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
+      - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
+      - SLOT_ID=$SLOT_ID
+      - SOURCE_RPC_URL=$SOURCE_RPC_URL
+      - PROST_RPC_URL=$PROST_RPC_URL
+      - IPFS_URL=$IPFS_URL
+      - IPFS_API_KEY=$IPFS_API_KEY
+      - IPFS_API_SECRET=$IPFS_API_SECRET
+      - PROTOCOL_STATE_CONTRACT=$PROTOCOL_STATE_CONTRACT
+      - DATA_MARKET_CONTRACT=$DATA_MARKET_CONTRACT
+      - LOCAL_COLLECTOR_PORT=$LOCAL_COLLECTOR_PORT
+      - SLACK_REPORTING_URL=$SLACK_REPORTING_URL
+      - POWERLOOM_REPORTING_URL=$POWERLOOM_REPORTING_URL
+      - WEB3_STORAGE_TOKEN=$WEB3_STORAGE_TOKEN
+      - NAMESPACE=$NAMESPACE
+      - TELEGRAM_REPORTING_URL=$TELEGRAM_REPORTING_URL
+      - TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    command:
+      bash -c "bash snapshotter_autofill.sh && bash init_docker_dev.sh"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - custom_network
+  ipfs:
+    image: ipfs/kubo:release
+    environment:
+      - IPFS_PROFILE=server
+      - DATA_CLEANUP_DAYS=3
+      - CLEANUP_SCHEDULE=0 * * * *
+    entrypoint: >
+      /bin/sh -c '
+      echo "Setting up data cleanup cron job...";
+      mkdir -p /var/spool/cron/crontabs;
+      cleanup_cmd="date && echo \"Starting hourly cleanup process...\" && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name \"*.data\" -print -delete && echo \"Hourly cleanup process completed.\"";
+      echo "$${CLEANUP_SCHEDULE} $${cleanup_cmd} >> /proc/1/fd/1 2>&1" > /var/spool/cron/crontabs/root;
+      chmod 0644 /var/spool/cron/crontabs/root;
+
+      echo "Cron job set up. Will clean files older than $${DATA_CLEANUP_DAYS} days every hour ($${CLEANUP_SCHEDULE})";
+
+      echo "Starting cron daemon...";
+      crond;
+
+      echo "Starting IPFS daemon...";
+      exec /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true --agent-version-suffix=docker
+      '
+    volumes:
+      - ipfs_data:/data/ipfs
+    ports:
+      - "4001:4001"  # Swarm listening port
+      - "5002:5001"  # API server
+      - "8080:8080"  # Gateway
+    healthcheck:
+      test: ["CMD", "ipfs", "id"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - custom_network
+  redis:
+    command: redis-server --appendonly yes
+    image: "redis:alpine"
+    expose:
+      - 6379
+    profiles: ["local-redis"]
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - custom_network
+  rabbitmq:
+    image: rabbitmq:3-management
+    #command: ["daemon"]
+    expose:
+      - 15672
+      - 5672
+    ports:
+      - 5672:5672
+      - 15672:15672
+    healthcheck:
+      test: rabbitmq-diagnostics check_port_connectivity
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - custom_network
+networks:
+  custom_network:
+    name: ${DOCKER_NETWORK_NAME}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${DOCKER_NETWORK_SUBNET}
+volumes:
+  ipfs_data:
+    name: ipfs_data

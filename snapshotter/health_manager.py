@@ -62,6 +62,7 @@ class HealthManager(multiprocessing.Process):
 
         self._shutdown_initiated = False
         self._last_epoch_processing_health_check = 0
+        self._last_epoch_checked = 0
 
     async def _init_redis_pool(self):
         """
@@ -103,7 +104,12 @@ class HealthManager(multiprocessing.Process):
         )
         self._client = AsyncClient(
             base_url=settings.reporting.service_url,
-            timeout=Timeout(timeout=5.0),
+            timeout=Timeout(
+                pool=settings.httpx.pool_timeout,
+                connect=settings.httpx.connect_timeout,
+                read=settings.httpx.read_timeout,
+                write=settings.httpx.write_timeout,
+            ),
             follow_redirects=False,
             transport=self._async_transport,
         )
@@ -204,6 +210,35 @@ class HealthManager(multiprocessing.Process):
         if last_snapshot_processed:
             last_snapshot_processed = int(last_snapshot_processed)
 
+        if self._last_epoch_checked == 0:
+            self._logger.info(
+                'Skipping epoch processing health check because this is the first run with no reference of last epoch checked by this service',
+            )
+            self._last_epoch_checked = current_epoch_id
+            return
+        elif current_epoch_id == self._last_epoch_checked:
+            self._logger.info(
+                'Skipping epoch processing health check because no new epoch was detected since last check. Probably Prost network is not producing new blocks',
+            )
+            await send_failure_notifications_async(
+                client=self._client,
+                message=SnapshotterIssue(
+                    instanceID=settings.instance_id,
+                    issueType=SnapshotterReportState.UNHEALTHY_EPOCH_PROCESSING.value,
+                    projectID='',
+                    epochId='',
+                    timeOfReporting=datetime.now().isoformat(),
+                    extra=json.dumps(
+                        {
+                            'last_epoch_checked': self._last_epoch_checked,
+                            'current_epoch_id': current_epoch_id,
+                            'reason': 'No new epoch detected since last check. Probably Prost network is not producing new blocks',
+                        },
+                    ),
+                ),
+            )
+            return
+
         # if no epoch is detected for 5 minutes, report unhealthy and send respawn command
         if last_epoch_detected and int(time.time()) - last_epoch_detected > 5 * 60:
             self._logger.debug(
@@ -228,6 +263,9 @@ class HealthManager(multiprocessing.Process):
                 'Sending respawn command for all process hub core children because no epoch was detected for ~30 epochs',
             )
             await self._send_proc_hub_respawn()
+            self._last_epoch_checked = current_epoch_id
+            # return so that no overlapping respawns are sent
+            return
 
         # if time difference between last epoch detected and last snapshot processed
         # is more than 5 minutes, report unhealthy and send respawn command
@@ -256,7 +294,10 @@ class HealthManager(multiprocessing.Process):
                 'Sending respawn command for all process hub core children because no snapshot processing was done for ~30 epochs',
             )
             await self._send_proc_hub_respawn()
-
+            self._last_epoch_checked = current_epoch_id
+            # return so that no overlapping respawns are sent
+            return
+        else:
             # check for epoch processing status
             epoch_health = dict()
             # check from previous epoch processing status until 2 further epochs
@@ -320,6 +361,7 @@ class HealthManager(multiprocessing.Process):
                     'Sending respawn command for all process hub core children because epochs were found unhealthy: {}', epoch_health,
                 )
                 await self._send_proc_hub_respawn()
+        self._last_epoch_checked = current_epoch_id
 
     async def _check_health(self, loop):
         # will do constant health checks and send respawn command if unhealthy

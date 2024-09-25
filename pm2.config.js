@@ -15,7 +15,7 @@ module.exports = {
       error_file: "/dev/null",
       out_file: "/dev/null",
       env: {
-        NODE_ENV: NODE_ENV,
+        NODE_ENV: NODE_ENV
       }
     },
     {
@@ -52,6 +52,6 @@ module.exports = {
       env: {
         NODE_ENV: NODE_ENV,
       }
-    },
+    }
   ]
 }

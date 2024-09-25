@@ -11,14 +11,14 @@ from functools import wraps
 from signal import SIGINT
 from signal import SIGQUIT
 from signal import SIGTERM
-
+from typing import Union
+from redis import asyncio as aioredis
 from web3 import Web3
-
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.exceptions import GenericExitOnSignal
 from snapshotter.utils.file_utils import read_json_file
-from snapshotter.utils.models.data_models import EpochReleasedEvent, SnapshotBatchFinalizedEvent
+from snapshotter.utils.models.data_models import EpochReleasedEvent, SnapshotBatchFinalizedEvent, SnapshotterIssue, SnapshotterReportState
 from snapshotter.utils.models.data_models import EventBase
 from snapshotter.utils.rabbitmq_helpers import RabbitmqThreadedSelectLoopInteractor
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
@@ -76,7 +76,8 @@ def rabbitmq_and_redis_cleanup(fn):
 class EventDetectorProcess(multiprocessing.Process):
     _rabbitmq_thread: threading.Thread
     _rabbitmq_queue: queue.Queue
-
+    _redis_conn: aioredis.Redis
+    _redis_pool: RedisPoolCache
     def __init__(self, name, **kwargs):
         """
         Initializes the SystemEventDetector class.
@@ -116,52 +117,65 @@ class EventDetectorProcess(multiprocessing.Process):
         self._routing_key_prefix = (
             f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}.'
         )
-        self._aioredis_pool = None
-        self._redis_conn = None
 
         self._last_processed_block = None
-
-        self.rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
-        self.rpc_helper.sync_init()
+        self._source_rpc_helper = RpcHelper(rpc_settings=settings.rpc)
+        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
         self.contract_abi = read_json_file(
             settings.protocol_state.abi,
             self._logger,
         )
         self.contract_address = settings.protocol_state.address
-        self.contract = self.rpc_helper.get_current_node()['web3_client'].eth.contract(
-            address=Web3.to_checksum_address(
-                self.contract_address,
-            ),
-            abi=self.contract_abi,
+        
+        self._last_reporting_service_ping = 0
+        self._last_reporting_message_sent = 0
+        self._simulation_completed = False
+
+    async def _wait_for_simulation_completion(self):
+        while True:
+            self._logger.info('Waiting for simulation completion...')
+            await asyncio.sleep(15)
+
+    async def init(self):
+        self._logger.info('Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 15 seconds...')
+        await asyncio.sleep(15)
+        await self._broadcast_simulation_submission()
+        # sleep until simulation is completed
+        try:
+            await asyncio.wait_for(self._wait_for_simulation_completion(), timeout=120)
+        except asyncio.TimeoutError:
+            pass  # expected
+        except Exception as e:
+            self._logger.error('Error while waiting for simulation completion: {}', e)
+        finally:
+            self._logger.info('Breaking out of simulation completion wait loop...')
+        # TODO: move simulation completion check to a separate cache entry or check on a contract entry 
+        # poll for simulation completion
+        self._simulation_completed = True
+    
+    async def _broadcast_simulation_submission(self):
+        self._logger.info('⏳Preparing simulation submission...')
+        current_block_number = await self._source_rpc_helper.get_current_block_number()
+
+        event = EpochReleasedEvent(
+            begin=current_block_number - 9,
+            end=current_block_number,
+            epochId=0,
+            timestamp=int(time.time()),
         )
 
-        # event EpochReleased(uint256 indexed epochId, uint256 begin, uint256 end, uint256 timestamp);
-        # event SnapshotFinalized(uint256 indexed epochId, uint256 epochEnd, string projectId,
-        # string snapshotCid, uint256 finalizedSnapshotCount, uint256 totalReceivedCount, uint256 timestamp);
-        # event SnapshotBatchFinalized(uint256 indexed epochId, uint256 epochEnd, string projectId, string snapshotCid, uint256 timestamp);
-        EVENTS_ABI = {
-            'EpochReleased': self.contract.events.EpochReleased._get_event_abi(),
-            'SnapshotBatchFinalized': self.contract.events.SnapshotBatchFinalized._get_event_abi(),
-        }
-
-        EVENT_SIGS = {
-            'EpochReleased': 'EpochReleased(uint256,uint256,uint256,uint256)',
-            'SnapshotBatchFinalized': 'SnapshotBatchFinalized(uint256,uint256,string,string,uint256)',
-        }
-
-        self.event_sig, self.event_abi = get_event_sig_and_abi(
-            EVENT_SIGS,
-            EVENTS_ABI,
+        self._logger.info(
+            'Broadcasting simulation submission: {}', event,
         )
+        self._broadcast_event("EpochReleased", event)
 
     async def _init_redis_pool(self):
         """
         Initializes the Redis connection pool if it hasn't been initialized yet.
         """
-        if not self._aioredis_pool:
-            self._aioredis_pool = RedisPoolCache()
-            await self._aioredis_pool.populate()
-            self._redis_conn = self._aioredis_pool._aioredis_pool
+        self._aioredis_pool = RedisPoolCache()
+        await self._aioredis_pool.populate()
+        self._redis_conn = self._aioredis_pool._aioredis_pool
 
     async def get_events(self, from_block: int, to_block: int):
         """
@@ -176,15 +190,12 @@ class EventDetectorProcess(multiprocessing.Process):
             List[Tuple[str, Any]]: A list of tuples, where each tuple contains the event name
             and an object representing the event data.
         """
-        events_log = await self.rpc_helper.get_events_logs(
-            **{
-                'contract_address': self.contract_address,
-                'to_block': to_block,
-                'from_block': from_block,
-                'topics': [self.event_sig],
-                'event_abi': self.event_abi,
-                'redis_conn': self._redis_conn,
-            },
+        events_log = await self._anchor_rpc_helper.get_events_logs(
+            contract_address=self.contract_address,
+            to_block=to_block,
+            from_block=from_block,
+            topics=[self.event_sig],
+            event_abi=self.event_abi,
         )
 
         events = []
@@ -220,7 +231,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 latest_epoch_id,
             )
 
-        self._logger.info('Events: {}', events)
+        self._logger.info('Events detected in block range on Prost network {}-{}: {}', from_block, to_block, events)
         return events
 
     def _interactor_wrapper(self, q: queue.Queue):  # run in a separate thread
@@ -255,7 +266,7 @@ class EventDetectorProcess(multiprocessing.Process):
             self._rabbitmq_interactor.stop()
             raise GenericExitOnSignal
 
-    def _broadcast_event(self, event_type: str, event: EventBase):
+    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotBatchFinalizedEvent]):
         """
         Broadcasts the given event to the RabbitMQ queue.
 
@@ -263,6 +274,9 @@ class EventDetectorProcess(multiprocessing.Process):
             event_type (str): The type of the event being broadcasted.
             event (EventBase): The event being broadcasted.
         """
+        if not self._simulation_completed and event.epochId != 0:
+            self._logger.debug('Skipping event broadcast to RabbitMQ for epoch {} as simulation is not complete. Incoming event: {}', event.epochId, event)
+            return
         self._logger.info('Broadcasting event: {}', event)
         brodcast_msg = (
             event.json().encode('utf-8'),
@@ -279,7 +293,7 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         while True:
             try:
-                current_block = await self.rpc_helper.get_current_block(redis_conn=self._redis_conn)
+                current_block = await self._anchor_rpc_helper.get_current_block(redis_conn=self._redis_conn)
                 self._logger.info('Current block: {}', current_block)
 
             except Exception as e:
@@ -384,7 +398,8 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         Initializes the RpcHelper instance.
         """
-        await self.rpc_helper.init(redis_conn=self._redis_conn)
+        await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
+        await self._source_rpc_helper.init(redis_conn=self._redis_conn)
     
     @rabbitmq_and_redis_cleanup
     def run(self):
@@ -396,6 +411,10 @@ class EventDetectorProcess(multiprocessing.Process):
         run()
             Starts the event detection process.
         """
+        self.ev_loop = asyncio.get_event_loop()
+        self.ev_loop.run_until_complete(
+            self._init_redis_pool(),
+        )
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,
@@ -407,15 +426,37 @@ class EventDetectorProcess(multiprocessing.Process):
             target=self._interactor_wrapper,
             kwargs={'q': self._rabbitmq_queue},
         )
-        self.ev_loop = asyncio.get_event_loop()
-
-        self.ev_loop.run_until_complete(
-            self._init_redis_pool(),
-        )
+        self._rabbitmq_thread.start()
         self.ev_loop.run_until_complete(
             self._init_rpc(),
         )
-        self._rabbitmq_thread.start()
+        self.ev_loop.run_until_complete(
+            self.init()
+        )
+
+        if not self._simulation_completed:
+            self._logger.info('Simulation not completed after polling period. Exiting...')
+            sys.exit(1)
+        
+        self.contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
+            address=Web3.to_checksum_address(
+                self.contract_address,
+            ),
+            abi=self.contract_abi,
+        )
+        EVENTS_ABI = {
+            'EpochReleased': self.contract.events.EpochReleased._get_event_abi(),
+            'DayStartedEvent': self.contract.events.DayStartedEvent._get_event_abi(),
+            'SnapshotBatchFinalized': self.contract.events.SnapshotBatchFinalized._get_event_abi(),
+        }
+        self.event_sig, self.event_abi = get_event_sig_and_abi(
+            {
+                'EpochReleased': 'EpochReleased(address,uint256,uint256,uint256,uint256)',
+                'DayStartedEvent': 'DayStartedEvent(address,uint256,uint256)',
+                'SnapshotBatchFinalized': 'SnapshotBatchFinalized(address,uint256,uint256,string,string,uint256)',
+            },
+            EVENTS_ABI,
+        )
 
         self.ev_loop.run_until_complete(
             self._detect_events(),

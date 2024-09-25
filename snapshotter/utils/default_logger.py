@@ -1,3 +1,4 @@
+import sys
 from loguru import logger
 
 from snapshotter.settings.config import settings

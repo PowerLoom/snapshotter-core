@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import queue
 import resource
+import sys
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -45,7 +46,7 @@ from snapshotter.utils.data_utils import get_source_chain_epoch_size
 from snapshotter.utils.data_utils import get_source_chain_id
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.file_utils import read_json_file
-from snapshotter.utils.models.data_models import SnapshotterEpochProcessingReportItem
+from snapshotter.utils.models.data_models import PowerloomSnapshotSignMessage, SigningWorkProjectsSnapshottedStateItem, SigningWorkSlotSelectionStateItem, SigningWorkStates, SnapshotterEpochProcessingReportItem
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
@@ -77,10 +78,17 @@ from snapshotter.utils.rpc import RpcHelper
 class ProcessorDistributor(multiprocessing.Process):
     _aioredis_pool: RedisPoolCache
     _redis_conn: aioredis.Redis
+    _rpc_helper: RpcHelper 
     _anchor_rpc_helper: RpcHelper
     _async_transport: AsyncHTTPTransport
     _client: AsyncClient
-
+    _snapshot_build_awaited_project_ids: Dict[int, Set[str]]  # epoch_id: project_ids
+    _slot_id_to_snapshotters: Dict[int, Dict[str, str]]  # slot_id: {snapshotters}
+    _slot_id_to_timeslot: Dict[int, int]  # slot_id: timeslot
+    _registered_slots: List[int]
+    _last_synced_slot_info: int
+    _source_chain_epoch_size: int
+    _source_chain_id: int
     def __init__(self, name, **kwargs):
         """
         Initialize the ProcessorDistributor object.
@@ -115,18 +123,16 @@ class ProcessorDistributor(multiprocessing.Process):
         """
         super(ProcessorDistributor, self).__init__(name=name, **kwargs)
         self._unique_id = f'{name}-' + keccak(text=str(uuid4())).hex()[:8]
+        self._logger = logger.bind(
+            module=f'Powerloom|Callbacks|ProcessDistributor:{settings.namespace}-{settings.instance_id}',
+        )
         self._q = queue.Queue()
         self._rabbitmq_interactor = None
         self._shutdown_initiated = False
-        self._rpc_helper = None
-        self._source_chain_id = None
-        self._projects_list = None
         self._consume_exchange_name = f'{settings.rabbitmq.setup.event_detector.exchange}:{settings.namespace}'
         self._consume_queue_name = (
             f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}'
         )
-
-        # ...
 
         self._initialized = False
         self._consume_queue_routing_key = f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}.*'
@@ -151,10 +157,12 @@ class ProcessorDistributor(multiprocessing.Process):
         self._project_type_config_mapping = dict()
         for project_config in projects_config:
             self._project_type_config_mapping[project_config.project_type] = project_config
-            for proload_task in project_config.preload_tasks:
-                self._all_preload_tasks.add(proload_task)
+            for preload_task in project_config.preload_tasks:
+                self._all_preload_tasks.add(preload_task)
+        self._logger.debug('All preload tasks by string ID during init: {}', self._all_preload_tasks)
         self._last_epoch_processing_health_check = 0
         self._preloader_compute_mapping = dict()
+        self._snapshot_build_awaited_project_ids = dict()
 
     def _signal_handler(self, signum, frame):
         """
@@ -180,7 +188,6 @@ class ProcessorDistributor(multiprocessing.Process):
         """
         Initializes the RpcHelper instance if it is not already initialized.
         """
-        # if not self._rpc_helper:
         self._rpc_helper = RpcHelper()
         await self._rpc_helper.init(redis_conn=self._redis_conn)
         self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
@@ -207,12 +214,12 @@ class ProcessorDistributor(multiprocessing.Process):
 
     async def _init_httpx_client(self):
         """
-        Initializes the HTTPX client with the specified settings.
+        Initializes the HTTPX client to send reports to reporting service with the specified settings.
         """
         self._async_transport = AsyncHTTPTransport(
             limits=Limits(
-                max_connections=100,
-                max_keepalive_connections=50,
+                max_connections=10,
+                max_keepalive_connections=5,
                 keepalive_expiry=None,
             ),
         )
@@ -261,8 +268,66 @@ class ProcessorDistributor(multiprocessing.Process):
         for preloader in preloaders:
             if preloader.task_type in self._all_preload_tasks:
                 preloader_module = importlib.import_module(preloader.module)
+                self._logger.debug('Imported preloader module: {}', preloader_module)
                 preloader_class = getattr(preloader_module, preloader.class_name)
                 self._preloader_compute_mapping[preloader.task_type] = preloader_class
+                self._logger.debug(
+                    'Imported preloader class {} against preloader module {} for task type {}',
+                    preloader_class,
+                    preloader_module,
+                    preloader.task_type
+                )
+    async def _init_protocol_meta(self):
+        """
+        Initializes the protocol metadata by fetching the source chain epoch size and source chain ID.
+        """
+        protocol_abi = read_json_file(settings.protocol_state.abi, self._logger)
+        self._protocol_state_contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
+            address=to_checksum_address(
+                settings.protocol_state.address,
+            ),
+            abi=protocol_abi,
+        )
+        try:
+            source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME(Web3.to_checksum_address(settings.data_market)).call()
+        except Exception as e:
+            self._logger.exception(
+                'Exception in querying protocol state for source chain block time: {}',
+                e,
+            )
+            sys.exit(1)
+        else:
+            self._source_chain_block_time = source_block_time / 10 ** 4
+            self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
+
+        try:
+            epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE(Web3.to_checksum_address(settings.data_market)).call()
+        except Exception as e:
+            self._logger.exception(
+                'Exception in querying protocol state for epoch size: {}',
+                e,
+            )
+            sys.exit(1)
+        else:
+            self._epoch_size = epoch_size
+            self._logger.debug('Set epoch size to {}', self._epoch_size)
+        self._epochs_in_a_day = 86400 // (self._epoch_size * self._source_chain_block_time)
+        self._logger.debug('Set epochs in a day to {}', self._epochs_in_a_day)
+        self._source_chain_epoch_size = await get_source_chain_epoch_size(
+            redis_conn=self._redis_conn, 
+            state_contract_obj=self._protocol_state_contract,
+            rpc_helper=self._anchor_rpc_helper
+        )
+        self._source_chain_id = await get_source_chain_id(
+            redis_conn=self._redis_conn,
+            rpc_helper=self._anchor_rpc_helper,
+            state_contract_obj=self._protocol_state_contract
+        )
+        self._submission_window = await get_snapshot_submision_window(
+            redis_conn=self._redis_conn,
+            rpc_helper=self._anchor_rpc_helper,
+            state_contract_obj=self._protocol_state_contract
+        )
 
     async def init_worker(self):
         """
@@ -271,81 +336,19 @@ class ProcessorDistributor(multiprocessing.Process):
         """
         if not self._initialized:
             await self._init_redis_pool()
+            self._logger.debug('Initialized Redis pool in Processor Distributor init_worker')
             await self._init_httpx_client()
+            self._logger.debug('Initialized httpx client in Processor Distributor init_worker')
             await self._init_rpc_helper()
-            await self._load_projects_metadata()
+            self._logger.debug('Initialized RPC helper in Processor Distributor init_worker')
             await self._init_rabbitmq_connection()
+            self._logger.debug('Initialized RabbitMQ connection in Processor Distributor init_worker')
             await self._init_preloader_compute_mapping()
+            self._logger.debug('Initialized preloader compute mapping in Processor Distributor init_worker')
+            await self._init_protocol_meta()
             self._initialized = True
 
-    async def _load_projects_metadata(self):
-        """
-        Loads the metadata for the projects, including the source chain ID, the list of projects, and the submission window
-        for snapshots. It also updates the project type configuration mapping with the relevant projects.
-        """
-        if not self._projects_list:
-            with open(settings.protocol_state.abi, 'r') as f:
-                abi_dict = json.load(f)
-            protocol_state_contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
-                address=Web3.to_checksum_address(
-                    settings.protocol_state.address,
-                ),
-                abi=abi_dict,
-            )
-            await get_source_chain_epoch_size(
-                redis_conn=self._redis_conn,
-                rpc_helper=self._anchor_rpc_helper,
-                state_contract_obj=protocol_state_contract,
-            )
-            self._source_chain_id = await get_source_chain_id(
-                redis_conn=self._redis_conn,
-                rpc_helper=self._anchor_rpc_helper,
-                state_contract_obj=protocol_state_contract,
-            )
-
-            # self._projects_list = await get_projects_list(
-            #     redis_conn=self._redis_conn,
-            #     rpc_helper=self._anchor_rpc_helper,
-            #     state_contract_obj=protocol_state_contract,
-            # )
-            self._projects_list = list()
-
-            # TODO: will be used after full project management overhaul
-            # using project set for now, keeping empty if not present in contract
-
-            # self._projects_list = await build_projects_list_from_events(
-            #     redis_conn=self._redis_conn,
-            #     rpc_helper=self._anchor_rpc_helper,
-            #     state_contract_obj=protocol_state_contract,
-            # )
-
-            # self._logger.info('Generated project list with {} projects', self._projects_list)
-
-            # iterate over project list fetched
-            for project_type, project_config in self._project_type_config_mapping.items():
-                project_type = project_config.project_type
-                if project_config.projects == []:
-                    relevant_projects = set(filter(lambda x: project_type in x, self._projects_list))
-                    project_data = set()
-                    for project in relevant_projects:
-                        data_source = project.split(':')[-2]
-                        project_data.add(
-                            data_source,
-                        )
-                    project_config.projects = list(project_data)
-
-            submission_window = await get_snapshot_submision_window(
-                redis_conn=self._redis_conn,
-                rpc_helper=self._anchor_rpc_helper,
-                state_contract_obj=protocol_state_contract,
-            )
-
-            if submission_window:
-                await self._redis_conn.set(
-                    snapshot_submission_window_key,
-                    submission_window,
-                )
-
+  
     async def _get_proc_hub_start_time(self) -> int:
         """
         Retrieves the start time of the process hub core from Redis.
@@ -358,177 +361,6 @@ class ProcessorDistributor(multiprocessing.Process):
             return int(_)
         else:
             return 0
-
-    async def _epoch_processing_health_check(self, current_epoch_id):
-        """
-        Perform health check for epoch processing.
-
-        Args:
-            current_epoch_id (int): The current epoch ID.
-
-        Returns:
-            None
-        """
-        # TODO: make the threshold values configurable.
-        # Range of epochs to be checked, success percentage/criteria, offset from current epoch
-        if current_epoch_id < 5:
-            return
-        # get last set start time by proc hub core
-        start_time = await self._get_proc_hub_start_time()
-
-        # only start if 5 minutes have passed since proc hub core start time
-        if int(time.time()) - start_time < 5 * 60:
-            self._logger.info(
-                'Skipping epoch processing health check because 5 minutes have not passed since proc hub core start time',
-            )
-            return
-
-        if start_time == 0:
-            self._logger.info('Skipping epoch processing health check because proc hub start time is not set')
-            return
-
-        # only runs once every minute
-        if self._last_epoch_processing_health_check != 0 and int(time.time()) - self._last_epoch_processing_health_check < 60:
-            self._logger.debug(
-                'Skipping epoch processing health check because it was run less than a minute ago',
-            )
-            return
-
-        if not (self._source_chain_block_time != 0 and self._epoch_size != 0):
-            self._logger.info(
-                'Skipping epoch processing health check because source chain block time or epoch size is not known | '
-                'Source chain block time: {} | Epoch size: {}',
-                self._source_chain_block_time,
-                self._epoch_size,
-            )
-            return
-        self._last_epoch_processing_health_check = int(time.time())
-
-        last_epoch_detected = await self._redis_conn.get(last_epoch_detected_timestamp_key())
-        last_snapshot_processed = await self._redis_conn.get(last_snapshot_processing_complete_timestamp_key())
-
-        if last_epoch_detected:
-            last_epoch_detected = int(last_epoch_detected)
-
-        if last_snapshot_processed:
-            last_snapshot_processed = int(last_snapshot_processed)
-
-        # if no epoch is detected for 30 epochs, report unhealthy and send respawn command
-        if last_epoch_detected and int(time.time()) - last_epoch_detected > 30 * self._source_chain_block_time * self._epoch_size:
-            self._logger.debug(
-                'Sending unhealthy epoch report to reporting service due to no epoch detected for ~30 epochs',
-            )
-            await send_failure_notifications_async(
-                client=self._client,
-                message=SnapshotterIssue(
-                    instanceID=settings.instance_id,
-                    issueType=SnapshotterReportState.UNHEALTHY_EPOCH_PROCESSING.value,
-                    projectID='',
-                    epochId='',
-                    timeOfReporting=datetime.now().isoformat(),
-                    extra=json.dumps(
-                        {
-                            'last_epoch_detected': last_epoch_detected,
-                        },
-                    ),
-                ),
-            )
-            self._logger.info(
-                'Sending respawn command for all process hub core children because no epoch was detected for ~30 epochs',
-            )
-            await self._send_proc_hub_respawn()
-
-        # if time difference between last epoch detected and last snapshot processed
-        # is more than 30 epochs, report unhealthy and send respawn command
-        if last_epoch_detected and last_snapshot_processed and \
-                last_epoch_detected - last_snapshot_processed > 30 * self._source_chain_block_time * self._epoch_size:
-            self._logger.debug(
-                'Sending unhealthy epoch report to reporting service due to no snapshot processing for ~30 epochs',
-            )
-            await send_failure_notifications_async(
-                client=self._client,
-                message=SnapshotterIssue(
-                    instanceID=settings.instance_id,
-                    issueType=SnapshotterReportState.UNHEALTHY_EPOCH_PROCESSING.value,
-                    projectID='',
-                    epochId='',
-                    timeOfReporting=datetime.now().isoformat(),
-                    extra=json.dumps(
-                        {
-                            'last_epoch_detected': last_epoch_detected,
-                            'last_snapshot_processed': last_snapshot_processed,
-                        },
-                    ),
-                ),
-            )
-            self._logger.info(
-                'Sending respawn command for all process hub core children because no snapshot processing was done for ~30 epochs',
-            )
-            await self._send_proc_hub_respawn()
-
-            # check for epoch processing status
-            epoch_health = dict()
-            # check from previous epoch processing status until 2 further epochs
-            build_state_val = SnapshotterStates.SNAPSHOT_BUILD.value
-            for epoch_id in range(current_epoch_id - 1, current_epoch_id - 3 - 1, -1):
-                epoch_specific_report = SnapshotterEpochProcessingReportItem.construct()
-                success_percentage = 0
-                epoch_specific_report.epochId = epoch_id
-                state_report_entries = await self._redis_conn.hgetall(
-                    name=epoch_id_project_to_state_mapping(epoch_id=epoch_id, state_id=build_state_val),
-                )
-                if state_report_entries:
-                    project_state_report_entries = {
-                        project_id.decode('utf-8'): SnapshotterStateUpdate.parse_raw(project_state_entry)
-                        for project_id, project_state_entry in state_report_entries.items()
-                    }
-                    epoch_specific_report.transitionStatus[build_state_val] = project_state_report_entries
-                    success_percentage += len(
-                        [
-                            project_state_report_entry
-                            for project_state_report_entry in project_state_report_entries.values()
-                            if project_state_report_entry.status == 'success'
-                        ],
-                    ) / len(project_state_report_entries)
-
-                if any([x is None for x in epoch_specific_report.transitionStatus.values()]):
-                    epoch_health[epoch_id] = False
-                    self._logger.debug(
-                        'Marking epoch {} as unhealthy due to missing state reports against transitions {}',
-                        epoch_id,
-                        [x for x, y in epoch_specific_report.transitionStatus.items() if y is None],
-                    )
-                if success_percentage < 0.5 and success_percentage != 0:
-                    epoch_health[epoch_id] = False
-                    self._logger.debug(
-                        'Marking epoch {} as unhealthy due to low success percentage: {}',
-                        epoch_id,
-                        success_percentage,
-                    )
-            if len([epoch_id for epoch_id, healthy in epoch_health.items() if not healthy]) >= 2:
-                self._logger.debug(
-                    'Sending unhealthy epoch report to reporting service: {}',
-                    epoch_health,
-                )
-                await send_failure_notifications_async(
-                    client=self._client,
-                    message=SnapshotterIssue(
-                        instanceID=settings.instance_id,
-                        issueType=SnapshotterReportState.UNHEALTHY_EPOCH_PROCESSING.value,
-                        projectID='',
-                        epochId='',
-                        timeOfReporting=datetime.now().isoformat(),
-                        extra=json.dumps(
-                            {
-                                'epoch_health': epoch_health,
-                            },
-                        ),
-                    ),
-                )
-                self._logger.info(
-                    'Sending respawn command for all process hub core children because epochs were found unhealthy: {}', epoch_health,
-                )
-                await self._send_proc_hub_respawn()
 
     async def _preloader_waiter(
         self,
@@ -550,6 +382,11 @@ class ProcessorDistributor(multiprocessing.Process):
             self._preload_completion_conditions[epoch.epochId][k]
             for k in preloader_types_l
         ]
+        self._logger.debug(
+            'Waiting for preload conditions against epoch {}: {}',
+            epoch.epochId,
+            conditions
+        )
         preload_results = await asyncio.gather(
             *conditions,
             return_exceptions=True,
@@ -557,8 +394,9 @@ class ProcessorDistributor(multiprocessing.Process):
         succesful_preloads = list()
         failed_preloads = list()
         self._logger.debug(
-            'Preloading asyncio gather returned with results {}',
+            'Preloading asyncio gather returned with results {} for epoch {}',
             preload_results,
+            epoch.epochId,
         )
         for i, preload_result in enumerate(preload_results):
             if isinstance(preload_result, Exception):
@@ -569,18 +407,20 @@ class ProcessorDistributor(multiprocessing.Process):
             else:
                 succesful_preloads.append(preloader_types_l[i])
                 self._logger.debug(
-                    'Preloading successful for preloader {}',
+                    'Preloading successful for preloader {} for epoch {}',
                     preloader_types_l[i],
+                    epoch.epochId,
                 )
 
-        self._logger.debug('Final list of successful preloads: {}', succesful_preloads)
+        self._logger.debug('Final list of successful preloads: {} for epoch {}', succesful_preloads, epoch.epochId)
         for project_type in self._project_type_config_mapping:
             project_config = self._project_type_config_mapping[project_type]
             if not project_config.preload_tasks:
                 continue
             self._logger.debug(
-                'Expected list of successful preloading for project type {}: {}',
+                'Expected list of successful preloading for project type {} epoch {}: {}',
                 project_type,
+                epoch.epochId,
                 project_config.preload_tasks,
             )
             if all([t in succesful_preloads for t in project_config.preload_tasks]):
@@ -632,6 +472,7 @@ class ProcessorDistributor(multiprocessing.Process):
         """
         # cleanup previous preloading complete tasks and events
         # start all preload tasks
+        self._logger.debug('Starting all preload tasks for epoch {}: {}', msg_obj.epochId, self._all_preload_tasks)
         for preloader in preloaders:
             if preloader.task_type in self._all_preload_tasks:
                 preloader_class = self._preloader_compute_mapping[preloader.task_type]
@@ -648,7 +489,12 @@ class ProcessorDistributor(multiprocessing.Process):
                 )
                 f = preloader_obj.compute(**preloader_compute_kwargs)
                 self._preload_completion_conditions[msg_obj.epochId][preloader.task_type] = f
-
+                self._logger.debug(
+                    'Preloader future {} against task type {} for epoch {} started',
+                    f,
+                    preloader.task_type,
+                    msg_obj.epochId,
+                )
         for project_type, project_config in self._project_type_config_mapping.items():
             if not project_config.preload_tasks:
                 # release for snapshotting
@@ -657,7 +503,7 @@ class ProcessorDistributor(multiprocessing.Process):
                         project_type, msg_obj,
                     ),
                 )
-                continue
+                continue 
 
         asyncio.ensure_future(
             self._preloader_waiter(
@@ -690,9 +536,9 @@ class ProcessorDistributor(multiprocessing.Process):
         self._newly_added_projects = self._newly_added_projects.union(
             await self._enable_pending_projects_for_epoch(msg_obj.epochId),
         )
-
+        self._logger.debug('Newly added projects for epoch {}: {}', msg_obj.epochId, self._newly_added_projects)
+        self._logger.debug('Pushing epoch release to preloader coroutine: {}', msg_obj)
         asyncio.ensure_future(self._exec_preloaders(msg_obj=msg_obj))
-        # asyncio.ensure_future(self._epoch_processing_health_check(msg_obj.epochId))
 
     async def _distribute_callbacks_snapshotting(self, project_type: str, epoch: EpochBase):
         """
@@ -763,11 +609,11 @@ class ProcessorDistributor(multiprocessing.Process):
                     f' {project_type} : {process_unit}',
                 )
                 return
-
+            static_source_project_ids = list()
             # handling projects with data sources
             for project in project_config.projects:
                 project_id = f'{project_type}:{project}:{settings.namespace}'
-
+                static_source_project_ids.append(project_id)
                 if project_id.lower() in self._newly_added_projects:
                     genesis = True
                     self._newly_added_projects.remove(project_id.lower())
@@ -798,19 +644,18 @@ class ProcessorDistributor(multiprocessing.Process):
                     ),
                 )
 
-                self._logger.debug(
-                    'Sent out message to be processed by worker'
-                    f' {project_type} : {process_unit}',
-                )
-
+                if project_config.projects:
+                    self._logger.debug(
+                        f'Sent out {len(project_config.projects)} {project_type} messages to be processed by snapshot builder worker'
+                        f' for epoch {epoch.epochId}',
+                    )
             results = await asyncio.gather(*queuing_tasks, return_exceptions=True)
-
-        for result in results:
-            if isinstance(result, Exception):
-                self._logger.error(
-                    'Error while sending message to queue. Error - {}',
-                    result,
-                )
+            for result in results:
+                if isinstance(result, Exception):
+                    self._logger.error(
+                        'Error while sending message to queue. Error - {}',
+                        result,
+                    )
 
     async def _enable_pending_projects_for_epoch(self, epoch_id) -> Set[str]:
         """
@@ -861,7 +706,8 @@ class ProcessorDistributor(multiprocessing.Process):
 
         self._upcoming_project_changes[msg_obj.enableEpochId].append(msg_obj)
 
-    async def _cache_and_forward_to_payload_commit_queue(self, message: IncomingMessage):
+    # NOTE: refactored from V1 to not send snapshot finalized message to payload commit queue since the service is deprecated
+    async def _cache_finalized_snapshot(self, message: IncomingMessage):
         """
         Caches the snapshot data and forwards it to the payload commit queue.
 
@@ -905,30 +751,7 @@ class ProcessorDistributor(multiprocessing.Process):
 
         self._logger.trace(f'Payload Commit Message Distribution time - {int(time.time())}')
 
-        # If not initialized yet, return
-        if not self._source_chain_id:
-            return
-
-        process_unit = PayloadCommitFinalizedMessage(
-            message=msg_obj,
-            web3Storage=True,
-            sourceChainId=self._source_chain_id,
-        )
-        async with self._rmq_channel_pool.acquire() as channel:
-            exchange = await channel.get_exchange(
-                name=self._payload_commit_exchange_name,
-            )
-            await exchange.publish(
-                routing_key=self._payload_commit_routing_key,
-                message=Message(process_unit.json().encode('utf-8')),
-            )
-
-        self._logger.trace(
-            (
-                'Sent out Event to Payload Commit Queue'
-                f' {event_type} : {process_unit}'
-            ),
-        )
+        
 
     async def _distribute_callbacks_aggregate(self, message: IncomingMessage):
         """
@@ -1017,7 +840,7 @@ class ProcessorDistributor(multiprocessing.Process):
                             finalized_messages.append(event)
 
                     if event_project_ids == set(config.projects_to_wait_for):
-                        self._logger.info(f'All projects present for {process_unit.epochId}, aggregating')
+                        self._logger.info(f'All project snapshots accumulated for epoch {process_unit.epochId} against multi aggregate project type {config.project_type}, aggregating')
                         final_msg = PowerloomCalculateAggregateMessage(
                             messages=sorted(finalized_messages, key=lambda x: x.projectId),
                             epochId=process_unit.epochId,
@@ -1042,7 +865,7 @@ class ProcessorDistributor(multiprocessing.Process):
 
                     else:
                         self._logger.trace(
-                            f'Not all projects present for {process_unit.epochId},'
+                            f'Not all projects present for epoch {process_unit.epochId} against multi aggregate project type {config.project_type},'
                             f' {len(set(config.projects_to_wait_for)) - len(event_project_ids)} missing',
                         )
         await asyncio.gather(*rabbitmq_publish_tasks, return_exceptions=True)
@@ -1082,15 +905,15 @@ class ProcessorDistributor(multiprocessing.Process):
 
         if message_type == 'EpochReleased':
             try:
-                _: EpochBase = EpochBase.parse_raw(message.body)
+                epoch_msg: EpochBase = EpochBase.parse_raw(message.body)
             except:
                 pass
             else:
                 await self._redis_conn.set(
-                    epoch_id_epoch_released_key(_.epochId),
+                    epoch_id_epoch_released_key(epoch_msg.epochId),
                     int(time.time()),
                 )
-                asyncio.ensure_future(self._cleanup_older_epoch_status(_.epochId))
+                asyncio.ensure_future(self._cleanup_older_epoch_status(epoch_msg.epochId))
 
             _ = await self._redis_conn.get(active_status_key)
             if _:
@@ -1107,7 +930,7 @@ class ProcessorDistributor(multiprocessing.Process):
 
         elif message_type == 'SnapshotFinalized':
             self._logger.info(f'SnapshotFinalizedEvent caught with message {message}')
-            await self._cache_and_forward_to_payload_commit_queue(
+            await self._cache_finalized_snapshot(
                 message,
             )
         elif message_type == 'ProjectsUpdated':
@@ -1161,9 +984,6 @@ class ProcessorDistributor(multiprocessing.Process):
         Runs the ProcessorDistributor by setting resource limits, registering signal handlers,
         initializing the worker, starting the RabbitMQ consumer, and running the event loop.
         """
-        self._logger = logger.bind(
-            module=f'Powerloom|Callbacks|ProcessDistributor:{settings.namespace}-{settings.instance_id}',
-        )
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,
@@ -1175,35 +995,13 @@ class ProcessorDistributor(multiprocessing.Process):
         self._anchor_rpc_helper = RpcHelper(
             rpc_settings=settings.anchor_chain_rpc,
         )
-        self._anchor_rpc_helper.sync_init()
-        protocol_abi = read_json_file(settings.protocol_state.abi, self._logger)
-        self._protocol_state_contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
-            address=to_checksum_address(
-                settings.protocol_state.address,
-            ),
-            abi=protocol_abi,
-        )
-        try:
-            source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME().call()
-        except Exception as e:
-            self._logger.exception(
-                'Exception in querying protocol state for source chain block time: {}',
-                e,
-            )
-        else:
-            self._source_chain_block_time = source_block_time / 10 ** 4
-            self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
-
-        try:
-            epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE().call()
-        except Exception as e:
-            self._logger.exception(
-                'Exception in querying protocol state for epoch size: {}',
-                e,
-            )
-        else:
-            self._epoch_size = epoch_size
+        
+        self._slots_per_day = 12
+        self._logger.debug('Set slots per day to {}', self._slots_per_day)
+        
+        
         ev_loop = asyncio.get_event_loop()
+        ev_loop.run_until_complete(self._anchor_rpc_helper.init())
         ev_loop.run_until_complete(self.init_worker())
 
         self._logger.debug('Starting RabbitMQ consumer on queue {} for Processor Distributor', self._consume_queue_name)
