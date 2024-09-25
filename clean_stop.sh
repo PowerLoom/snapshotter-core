@@ -104,9 +104,4 @@ else
     COMPOSE_CMD="docker compose"
 fi
 
-if [ "$DEVMODE" = "false" ]; then
-    $COMPOSE_CMD -f docker-compose.yaml $PROFILES pull
-fi
-
-# $COMPOSE_CMD -f docker-compose.yaml $PROFILES up -V --abort-on-container-exit
 $COMPOSE_CMD -f docker-compose.yaml $PROFILES down --volumes
