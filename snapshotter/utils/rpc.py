@@ -80,6 +80,15 @@ def get_event_sig_and_abi(event_signatures, event_abis):
     Given a dictionary of event signatures and a dictionary of event ABIs,
     returns a tuple containing a list of event signatures and a dictionary of
     event ABIs keyed by their corresponding signature hash.
+
+    Args:
+        event_signatures (dict): Dictionary of event signatures.
+        event_abis (dict): Dictionary of event ABIs.
+
+    Returns:
+        tuple: A tuple containing:
+            - list: List of event signatures.
+            - dict: Dictionary of event ABIs keyed by their signature hash.
     """
     event_sig = [
         '0x' + keccak(text=sig).hex() for name, sig in event_signatures.items()
@@ -211,6 +220,15 @@ class RpcHelper(object):
                 self._logger.error('No full nor archive nodes found in config')
 
     def sync_init(self):
+        """
+        Initializes the synchronous nodes for the RPC client.
+
+        This method sets up the Web3 providers for each node specified in the configuration.
+        It handles both full nodes and archive nodes based on the archive_mode setting.
+
+        Raises:
+            Exception: If no full or archive nodes are found in the configuration.
+        """
         if self._sync_nodes_initialized:
             return
         if self._archive_mode:
@@ -245,17 +263,14 @@ class RpcHelper(object):
         """
         Returns the current node to use for RPC calls.
 
-        If the sync nodes have not been initialized, it initializes them by loading web3 providers and rate limits.
         If there are no full nodes available, it raises an exception.
 
         Returns:
-            The current node to use for RPC calls.
-        """
-        # NOTE: the following should not do an implicit initialization of the nodes. too much of hidden logic
-        # if not self._sync_nodes_initialized:
-        #     self._load_web3_providers_and_rate_limits()
-        #     self._sync_nodes_initialized = True
+            dict: The current node to use for RPC calls.
 
+        Raises:
+            Exception: If no full nodes are available.
+        """
         if self._node_count == 0:
             raise Exception('No full nodes available')
         return self._nodes[self._current_node_index]
@@ -290,7 +305,7 @@ class RpcHelper(object):
             redis_conn: Redis connection object.
 
         Returns:
-            The current block number of the Ethereum blockchain.
+            int: The current block number of the Ethereum blockchain.
 
         Raises:
             RPCException: If an error occurs while making the RPC call.
@@ -331,7 +346,7 @@ class RpcHelper(object):
             redis_conn: Redis connection object.
 
         Returns:
-            The transaction receipt details as a dictionary.
+            dict: The transaction receipt details as a dictionary.
 
         Raises:
             RPCException: If an error occurs while retrieving the transaction receipt.
@@ -373,9 +388,10 @@ class RpcHelper(object):
 
         Args:
             redis_conn: Redis connection object.
+            node_idx (int): Index of the node to use for the RPC call.
 
         Returns:
-            The current block number of the Ethereum blockchain.
+            int: The current block number of the Ethereum blockchain.
 
         Raises:
             RPCException: If an error occurs while making the RPC call.
@@ -415,11 +431,12 @@ class RpcHelper(object):
             tasks (list): List of tuples of (contract functions, contract args) to call. By name.
             contract_addr (str): Address of the contract to call.
             abi (dict): ABI of the contract.
-            redis_conn: Redis connection object.
-            from_address (str, optional): Address to use as the transaction sender. Defaults to None.
 
         Returns:
             list: List of responses from the contract function calls.
+
+        Raises:
+            RPCException: If an error occurs during the web3 batch call.
         """
         @retry(
             reraise=True,
@@ -428,8 +445,6 @@ class RpcHelper(object):
             stop=stop_after_attempt(settings.rpc.retry),
             before_sleep=self._on_node_exception,
         )
-        # TODO: add support for passing arbitrary arguments to contract functions depending on signature
-        # TODO: add support for validating function names, signatures etc 
         async def f(node_idx):
             try:
                 node = self._nodes[node_idx]
@@ -510,23 +525,21 @@ class RpcHelper(object):
             response_exceptions = []
             return_response_data = None
             trie_node_exc = False
-            if type(response_data) is list:
+            if isinstance(response_data, list):
                 return_response_list = []
                 for response_item in response_data:
                     if 'error' in response_item:
-                        if type(response_item['error']) == dict and 'message' in response_item['error'] and 'missing trie node' in response_item['error']['message']:
+                        if isinstance(response_item['error'], dict) and 'message' in response_item['error'] and 'missing trie node' in response_item['error']['message']:
                             # do not raise exception for missing trie node error, further retries will only be wasteful
-                            trie_node_exc = True or trie_node_exc
+                            trie_node_exc = True
                             continue
-                        response_exceptions.append(
-                            response_exceptions.append(response_item['error']),
-                        )
+                        response_exceptions.append(response_item['error'])
                     else:
                         return_response_list.append(response_item)
                 return_response_data = return_response_list
             else:
                 if 'error' in response_data:
-                    if type(response_data['error']) == dict and 'message' in response_data['error'] and 'missing trie node' in response_data['error']['message']:
+                    if isinstance(response_data['error'], dict) and 'message' in response_data['error'] and 'missing trie node' in response_data['error']['message']:
                         # do not raise exception for missing trie node error, further retries will only be wasteful
                         trie_node_exc = True
                     response_exceptions.append(response_data['error'])
@@ -677,7 +690,7 @@ class RpcHelper(object):
         from_address=Web3.to_checksum_address('0x0000000000000000000000000000000000000000'),
     ):
         """
-        Batch executes an Ethereum contract function call on a range of blocks.
+        Batch executes an Ethereum contract function call on a range of blocks and returns raw HexBytes data.
 
         Args:
             abi_dict (dict): The ABI dictionary of the contract.
@@ -690,7 +703,7 @@ class RpcHelper(object):
             from_address (str, optional): The address to use as the sender of the transaction. Defaults to '0x0000000000000000000000000000000000000000'.
 
         Returns:
-            list: A list raw HexBytes data results from the function call.
+            list: A list of raw HexBytes data results from the function call.
         """
         if params is None:
             params = []
@@ -781,6 +794,9 @@ class RpcHelper(object):
 
         Returns:
             List[Dict]: A list of dictionaries representing the decoded events logs.
+
+        Raises:
+            RPCException: If there's an error in retrieving or processing the event logs.
         """
         @retry(
             reraise=True,

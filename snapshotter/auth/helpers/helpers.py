@@ -22,7 +22,13 @@ async def incr_success_calls_count(
     auth_redis_conn: aioredis.Redis,
     rate_limit_auth_dep: RateLimitAuthCheck,
 ):
-    # on success
+    """
+    Increment the successful calls count for a user.
+
+    Args:
+        auth_redis_conn (aioredis.Redis): Redis connection for authentication.
+        rate_limit_auth_dep (RateLimitAuthCheck): Rate limit authentication dependency.
+    """
     await auth_redis_conn.hincrby(
         name=user_details_htable(rate_limit_auth_dep.owner.email),
         key='callsCount',
@@ -34,7 +40,13 @@ async def incr_throttled_calls_count(
     auth_redis_conn: aioredis.Redis,
     rate_limit_auth_dep: RateLimitAuthCheck,
 ):
-    # on throttle
+    """
+    Increment the throttled calls count for a user.
+
+    Args:
+        auth_redis_conn (aioredis.Redis): Redis connection for authentication.
+        rate_limit_auth_dep (RateLimitAuthCheck): Rate limit authentication dependency.
+    """
     await auth_redis_conn.hincrby(
         name=user_details_htable(rate_limit_auth_dep.owner.email),
         key='throttledCount',
@@ -45,7 +57,17 @@ async def incr_throttled_calls_count(
 def inject_rate_limit_fail_response(
     rate_limit_auth_check_dependency: RateLimitAuthCheck,
 ) -> JSONResponse:
+    """
+    Generate a JSON response for rate limit failure.
+
+    Args:
+        rate_limit_auth_check_dependency (RateLimitAuthCheck): Rate limit authentication dependency.
+
+    Returns:
+        JSONResponse: A JSON response with appropriate status code and headers.
+    """
     if rate_limit_auth_check_dependency.authorized:
+        # User is authorized but exceeded rate limit
         response_body = {
             'error': {
                 'details': (
@@ -69,6 +91,7 @@ def inject_rate_limit_fail_response(
         }
         response_status = 429
     else:
+        # User is not authorized
         response_headers = dict()
         response_body = {
             'error': {
@@ -96,6 +119,16 @@ async def check_user_details(
     api_key,
     redis_conn: aioredis.Redis,
 ):
+    """
+    Check user details based on the provided API key.
+
+    Args:
+        api_key (str): The API key to check.
+        redis_conn (aioredis.Redis): Redis connection for authentication.
+
+    Returns:
+        AuthCheck: An AuthCheck object containing authorization details.
+    """
     owner_email = await redis_conn.get(api_key_to_owner_key(api_key))
     if not owner_email:
         return AuthCheck(
@@ -125,6 +158,15 @@ async def check_user_details(
 async def auth_check(
     request: Request,
 ) -> AuthCheck:
+    """
+    Perform authentication check for the incoming request.
+
+    Args:
+        request (Request): The incoming FastAPI request object.
+
+    Returns:
+        AuthCheck: An AuthCheck object containing authorization details.
+    """
     core_settings = request.app.state.core_settings.core_api
     auth_redis_conn: aioredis.Redis = request.app.state.auth_aioredis_pool
     expected_header_key_for_auth = core_settings.auth.header_key
@@ -134,7 +176,7 @@ async def auth_check(
         else None
     )
     if not api_key_in_header:
-        # public access. create owner based on IP address
+        # Handle public access based on IP address
         if 'CF-Connecting-IP' in request.headers:
             user_ip = request.headers['CF-Connecting-IP']
         elif 'X-Forwarded-For' in request.headers:
@@ -147,6 +189,7 @@ async def auth_check(
             user_details_htable(user_ip),
         )
         if not ip_user_dets_b:
+            # Create new public user if not exists
             public_owner = AppOwnerModel(
                 email=user_ip,
                 rate_limit=core_settings.public_rate_limit,
@@ -160,6 +203,7 @@ async def auth_check(
                 mapping=public_owner.dict(),
             )
         else:
+            # Load existing public user details
             ip_owner_details = {
                 k.decode('utf-8'): v.decode('utf-8') for k, v in ip_user_dets_b.items()
             }
@@ -170,6 +214,7 @@ async def auth_check(
             api_key='dummy',
         )
     else:
+        # Check user details for API key authentication
         return await check_user_details(api_key_in_header, auth_redis_conn)
 
 
@@ -177,9 +222,20 @@ async def rate_limit_auth_check(
     request: Request,
     auth_check: AuthCheck = Depends(auth_check),
 ) -> RateLimitAuthCheck:
+    """
+    Perform rate limit and authentication check for the incoming request.
+
+    Args:
+        request (Request): The incoming FastAPI request object.
+        auth_check (AuthCheck): The result of the initial authentication check.
+
+    Returns:
+        RateLimitAuthCheck: A RateLimitAuthCheck object containing rate limit and authorization details.
+    """
     if auth_check.authorized:
         auth_redis_conn: aioredis.Redis = request.app.state.auth_aioredis_pool
         try:
+            # Perform rate limiting check
             passed, retry_after, violated_limit = await generic_rate_limiter(
                 parsed_limits=parse_many(auth_check.owner.rate_limit),
                 key_bits=[
@@ -191,6 +247,7 @@ async def rate_limit_auth_check(
                 redis_conn=auth_redis_conn,
             )
         except:
+            # Handle internal cache error
             auth_check.authorized = False
             auth_check.reason = 'internal cache error'
             return RateLimitAuthCheck(
@@ -212,6 +269,7 @@ async def rate_limit_auth_check(
                 await incr_throttled_calls_count(auth_redis_conn, ret)
             return ret
         finally:
+            # Reset user's call counts if the reset time has passed
             if auth_check.owner.next_reset_at <= int(time.time()):
                 owner_updated_obj = auth_check.owner.copy(deep=True)
                 owner_updated_obj.callsCount = 0
@@ -222,6 +280,7 @@ async def rate_limit_auth_check(
                     mapping=owner_updated_obj.dict(),
                 )
     else:
+        # Handle unauthorized access
         return RateLimitAuthCheck(
             **auth_check.dict(),
             rate_limit_passed=False,

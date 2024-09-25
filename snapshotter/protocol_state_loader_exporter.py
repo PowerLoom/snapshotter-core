@@ -30,6 +30,13 @@ from snapshotter.utils.utility_functions import acquire_bounded_semaphore
 
 
 class ProtocolStateLoader:
+    """
+    A class for loading and exporting protocol state data.
+
+    This class provides methods to initialize connections, load data from contracts,
+    and export/import state data to/from files.
+    """
+
     _anchor_rpc_helper: RpcHelper
     _redis_conn: aioredis.Redis
     _protocol_state_query_semaphore: asyncio.BoundedSemaphore
@@ -37,7 +44,16 @@ class ProtocolStateLoader:
     @acquire_bounded_semaphore
     async def _load_finalized_cids_from_contract_in_epoch_range(self, project_id, begin_epoch_id, cur_epoch_id, semaphore):
         """
-        Fetches finalized CIDs for a project against an epoch ID range from the contract and caches them in Redis
+        Fetches finalized CIDs for a project against an epoch ID range from the contract and caches them in Redis.
+
+        Args:
+            project_id (str): The ID of the project.
+            begin_epoch_id (int): The starting epoch ID.
+            cur_epoch_id (int): The current (ending) epoch ID.
+            semaphore (asyncio.Semaphore): A semaphore to control concurrent access.
+
+        Returns:
+            None
         """
         epoch_id_fetch_batch_size = 20
         for e in range(begin_epoch_id, cur_epoch_id + 1, epoch_id_fetch_batch_size):
@@ -72,7 +88,15 @@ class ProtocolStateLoader:
     @acquire_bounded_semaphore
     async def _load_finalized_cids_from_contract(self, project_id, epoch_id_list, semaphore) -> Dict[int, str]:
         """
-        Fetches finalized CIDs for a project against a given list of epoch IDs from the contract and caches them in Redis
+        Fetches finalized CIDs for a project against a given list of epoch IDs from the contract and caches them in Redis.
+
+        Args:
+            project_id (str): The ID of the project.
+            epoch_id_list (List[int]): A list of epoch IDs to fetch CIDs for.
+            semaphore (asyncio.Semaphore): A semaphore to control concurrent access.
+
+        Returns:
+            Dict[int, str]: A dictionary mapping epoch IDs to their corresponding CIDs.
         """
         batch_size = 20
         self._logger.info(
@@ -154,6 +178,9 @@ class ProtocolStateLoader:
         """
         Performs preliminary loading of protocol state data.
 
+        This method initializes the object, fetches the current epoch ID and all project IDs,
+        and retrieves the first epoch ID for each project.
+
         Returns:
             Tuple: A tuple containing the current epoch ID, a dictionary mapping project IDs to their first epoch IDs,
                     and a list of all project IDs.
@@ -165,18 +192,16 @@ class ProtocolStateLoader:
         all_project_ids_task = self._protocol_state_contract.functions.getProjects()
         state_query_call_tasks.append(all_project_ids_task)
         results = await self._anchor_rpc_helper.web3_call(state_query_call_tasks, self._redis_conn)
-        # print(results)
-        # current epoch ID query returned as a list representing the ordered array of elements (begin, end, epochID) of the struct
-        # and the other list has only element corresponding to the single level structure of the struct EpochInfo in the contract
+        
+        # Extract current epoch ID and all project IDs from results
         cur_epoch_id = results[0][-1]
         all_project_ids: list = results[1]
+        
         self._logger.debug('Getting first epoch ID against all projects')
         project_id_first_epoch_query_tasks = [
-            # get project first epoch ID
             get_project_first_epoch(
                 self._redis_conn, self._protocol_state_contract, self._anchor_rpc_helper, project_id,
             ) for project_id in all_project_ids
-            # self._protocol_state_contract.functions.projectFirstEpochId(project_id) for project_id in all_project_ids
         ]
         project_to_first_epoch_id_results = await asyncio.gather(*project_id_first_epoch_query_tasks, return_exceptions=True)
         self._logger.debug(
@@ -190,6 +215,8 @@ class ProtocolStateLoader:
     def _export_project_state(self, project_id, first_epoch_id, end_epoch_id, redis_conn: redis.Redis) -> ProjectSpecificState:
         """
         Export the project state for a specific project.
+
+        This method retrieves the finalized CIDs for a project within a given epoch range from Redis.
 
         Args:
             project_id (str): The ID of the project.
@@ -213,14 +240,6 @@ class ProtocolStateLoader:
         )
         if cids_r:
             [project_state.finalized_cids.update({int(eid): cid}) for cid, eid in cids_r]
-        # null_cid_epochs = list(filter(lambda x: 'null' in project_state.finalized_cids[x], project_state.finalized_cids.keys()))
-        # # recheck on the contract if they are indeed null
-        # self._logger.debug('Verifying CIDs against epoch IDs of project {} by re-fetching state from contract since they were found to be null in local cache: {}', project_id, null_cid_epochs)
-        # rechecked_eid_cid_map = asyncio.get_event_loop().run_until_complete(self._load_finalized_cids_from_contract(
-        #     project_id, null_cid_epochs, self._protocol_state_query_semaphore,
-        # ))
-        # project_state.finalized_cids.update(rechecked_eid_cid_map)
-        # self._logger.debug('Exported {} finalized CIDs for project {}', len(project_state.finalized_cids), project_id)
         return project_state
 
     def export(self):
@@ -241,12 +260,15 @@ class ProtocolStateLoader:
         state.synced_till_epoch_id = cur_epoch_id
         state.project_specific_states = dict()
         exceptions = defaultdict()
+        
+        # Use ThreadPoolExecutor to parallelize project state export
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             future_to_project = {
                 executor.submit(
                     self._export_project_state, project_id, project_id_first_epoch_id_map[project_id], cur_epoch_id, r,
                 ): project_id for project_id in all_project_ids
             }
+        
         for future in concurrent.futures.as_completed(future_to_project):
             project_id = future_to_project[future]
             try:
@@ -254,27 +276,30 @@ class ProtocolStateLoader:
             except Exception as exc:
                 exceptions['project'].update({project_id: str(exc)})
             else:
+                # Check for null CIDs and re-fetch from contract if necessary
                 null_cid_epochs = list(
                     filter(
                         lambda x: 'null' in project_specific_state.finalized_cids[x], project_specific_state.finalized_cids.keys(
                         ),
                     ),
                 )
-                # recheck on the contract if they are indeed null
-                self._logger.debug(
-                    'Verifying CIDs against epoch IDs of project {} by re-fetching state from contract since they were found to be null in local cache: {}', project_id, null_cid_epochs,
-                )
-                rechecked_eid_cid_map = asyncio.get_event_loop().run_until_complete(
-                    self._load_finalized_cids_from_contract(
-                        project_id=project_id, epoch_id_list=null_cid_epochs, semaphore=self._protocol_state_query_semaphore,
-                    ),
-                )
-                project_specific_state.finalized_cids.update(rechecked_eid_cid_map)
+                if null_cid_epochs:
+                    self._logger.debug(
+                        'Verifying CIDs against epoch IDs of project {} by re-fetching state from contract since they were found to be null in local cache: {}', project_id, null_cid_epochs,
+                    )
+                    rechecked_eid_cid_map = asyncio.get_event_loop().run_until_complete(
+                        self._load_finalized_cids_from_contract(
+                            project_id=project_id, epoch_id_list=null_cid_epochs, semaphore=self._protocol_state_query_semaphore,
+                        ),
+                    )
+                    project_specific_state.finalized_cids.update(rechecked_eid_cid_map)
                 self._logger.debug(
                     'Exported {} finalized CIDs for project {}',
                     len(project_specific_state.finalized_cids), project_id,
                 )
                 state.project_specific_states[project_id] = project_specific_state
+        
+        # Compress and save the state to a file
         state_json = state.json()
         with bz2.open('state.json.bz2', 'wb') as f:
             with io.TextIOWrapper(f, encoding='utf-8') as enc:
@@ -283,7 +308,7 @@ class ProtocolStateLoader:
 
     def _load_project_state(self, project_id, project_state: ProjectSpecificState, redis_conn: redis.Redis):
         """
-        Loads the project state for a specific project.
+        Loads the project state for a specific project into Redis.
 
         Args:
             project_id (str): The ID of the project.
@@ -308,7 +333,7 @@ class ProtocolStateLoader:
 
     def load(self, file_name='state.json.bz2'):
         """
-        Loads the protocol state from a file.
+        Loads the protocol state from a file and populates Redis.
 
         Args:
             file_name (str): The name of the file to load the state from. Default is 'state.json.bz2'.
@@ -316,6 +341,8 @@ class ProtocolStateLoader:
         asyncio.get_event_loop().run_until_complete(self.init())
         r = redis.Redis(**REDIS_CONN_CONF, max_connections=20, decode_responses=True)
         self._logger.debug('Loading state from file {}', file_name)
+        
+        # Read and parse the compressed state file
         with bz2.open(file_name, 'rb') as f:
             state_json = f.read()
         try:
@@ -325,7 +352,10 @@ class ProtocolStateLoader:
             with open('state_parse_error.json', 'w') as f:
                 json.dump(e.errors(), f)
             return
+        
         self._logger.debug('Loading state from file {}', file_name)
+        
+        # Use ThreadPoolExecutor to parallelize project state loading
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             future_to_project = {
                 executor.submit(
@@ -334,6 +364,7 @@ class ProtocolStateLoader:
                     ), r,
                 ): project_id for project_id, project_state in state.project_specific_states.items()
             }
+        
         for future in concurrent.futures.as_completed(future_to_project):
             project_id = future_to_project[future]
             try:
@@ -346,14 +377,19 @@ class ProtocolStateLoader:
 
 
 if __name__ == '__main__':
+    # Set up asyncio event loop policy and resource limits
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     resource.setrlimit(
         resource.RLIMIT_NOFILE,
         (settings.rlimit.file_descriptors, hard),
     )
+    
+    # Initialize ProtocolStateLoader
     state_loader_exporter = ProtocolStateLoader()
     asyncio.get_event_loop().run_until_complete(state_loader_exporter.init())
+    
+    # Execute export or load based on command-line argument
     if sys.argv[1] == 'export':
         ProtocolStateLoader().export()
     elif sys.argv[1] == 'load':

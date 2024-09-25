@@ -1,3 +1,10 @@
+"""
+This module contains the core API endpoints for the Snapshotter service.
+
+It includes functionality for health checks, epoch information retrieval,
+project data fetching, and task status checking.
+"""
+
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi import Response
@@ -17,24 +24,28 @@ from snapshotter.utils.models.data_models import TaskStatusRequest
 from snapshotter.utils.rpc import RpcHelper
 
 
-# setup logging
+# Setup logging
 rest_logger = logger.bind(module='CoreAPI')
 
 
+# Load protocol state contract ABI and address
 protocol_state_contract_abi = read_json_file(
     settings.protocol_state.abi,
     rest_logger,
 )
 protocol_state_contract_address = settings.protocol_state.address
 
-# setup CORS origins stuff
+# Setup CORS origins
 origins = ['*']
 app = FastAPI()
-# for pagination of epoch processing status reports
+
+# Configure pagination for epoch processing status reports
 Page = Page.with_custom_options(
     size=Field(10, ge=1, le=30),
 )
 add_pagination(app)
+
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -47,7 +58,8 @@ app.add_middleware(
 @app.on_event('startup')
 async def startup_boilerplate():
     """
-    This function initializes various state variables and caches required for the application to function properly.
+    Initialize various state variables and caches required for the application to function properly.
+    This function is called when the FastAPI application starts up.
     """
     app.state.core_settings = settings
     app.state.local_user_cache = dict()
@@ -60,6 +72,7 @@ async def startup_boilerplate():
         abi=protocol_state_contract_abi,
     )
 
+    # Initialize IPFS client if URL is set
     if not settings.ipfs.url:
         rest_logger.warning('IPFS url not set, /data API endpoint will be unusable!')
     else:
@@ -69,7 +82,6 @@ async def startup_boilerplate():
     app.state.epoch_size = 0
 
 
-# Health check endpoint
 @app.get('/health')
 async def health_check(
     request: Request,
@@ -187,15 +199,16 @@ async def get_project_last_finalized_epoch_info(
     """
 
     try:
-
-        # find from contract
+        # Find the last finalized epoch from the contract
         epoch_finalized = False
         [cur_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
             [request.app.state.protocol_state_contract.functions.currentEpoch(Web3.to_checksum_address(settings.data_market))],
         )
         epoch_id = int(cur_epoch[2])
+        
+        # Iterate backwards through epochs until a finalized one is found
         while not epoch_finalized and epoch_id >= 0:
-            # get finalization status
+            # Get finalization status
             [epoch_finalized_contract] = await request.app.state.anchor_rpc_helper.web3_call(
                 [request.app.state.protocol_state_contract.functions.snapshotStatus(settings.data_market, project_id, epoch_id)],
             )
@@ -210,6 +223,8 @@ async def get_project_last_finalized_epoch_info(
                         'status': 'error',
                         'message': f'Unable to find last finalized epoch for project {project_id}',
                     }
+        
+        # Get epoch info for the last finalized epoch
         [epoch_info_data] = await request.app.state.anchor_rpc_helper.web3_call(
             [request.app.state.protocol_state_contract.functions.epochInfo(Web3.to_checksum_address(settings.data_market), project_last_finalized_epoch)],
         )
@@ -234,7 +249,6 @@ async def get_project_last_finalized_epoch_info(
     return epoch_info
 
 
-# get data for epoch_id, project_id
 @app.get('/data/{epoch_id}/{project_id}/')
 async def get_data_for_project_id_epoch_id(
     request: Request,
@@ -290,7 +304,6 @@ async def get_data_for_project_id_epoch_id(
     return data
 
 
-# get finalized cid for epoch_id, project_id
 @app.get('/cid/{epoch_id}/{project_id}/')
 async def get_finalized_cid_for_project_id_epoch_id(
     request: Request,
@@ -359,7 +372,7 @@ async def get_task_status_post(
     Returns:
         dict: A dictionary containing the status of the task and a message.
     """
-    # check wallet address is valid EVM address
+    # Check if wallet address is a valid EVM address
     try:
         Web3.to_checksum_address(task_status_request.wallet_address)
     except:
@@ -369,9 +382,11 @@ async def get_task_status_post(
             'message': f'Invalid wallet address: {task_status_request.wallet_address}',
         }
 
+    # Construct project ID
     project_id = f'{task_status_request.task_type}:{task_status_request.wallet_address.lower()}:{settings.namespace}'
+    
     try:
-
+        # Get the last finalized epoch for the project
         [last_finalized_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
             [request.app.state.protocol_state_contract.functions.lastFinalizedSnapshot(Web3.to_checksum_address(settings.data_market), project_id)],
         )
@@ -387,7 +402,7 @@ async def get_task_status_post(
             'message': f'Unable to get last_finalized_epoch, error: {e}',
         }
     else:
-
+        # Determine if the task is completed based on the last finalized epoch
         if last_finalized_epoch > 0:
             return {
                 'completed': True,

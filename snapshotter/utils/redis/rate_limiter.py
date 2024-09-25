@@ -13,6 +13,8 @@ from snapshotter.utils.exceptions import RPCException
 LUA_SCRIPT_SHAS = None
 
 # # # RATE LIMITER LUA SCRIPTS
+
+# Script to clear all keys matching a pattern
 SCRIPT_CLEAR_KEYS = """
         local keys = redis.call('keys', KEYS[1])
         local res = 0
@@ -24,6 +26,7 @@ SCRIPT_CLEAR_KEYS = """
         return res
         """
 
+# Script to increment a key and set its expiry
 SCRIPT_INCR_EXPIRE = """
         local current
         current = redis.call("incrby",KEYS[1],ARGV[2])
@@ -33,6 +36,7 @@ SCRIPT_INCR_EXPIRE = """
         return current
     """
 
+# Script to set a key's value and expiry
 # args = [value, expiry]
 SCRIPT_SET_EXPIRE = """
     local keyttl = redis.call('TTL', KEYS[1])
@@ -46,14 +50,14 @@ SCRIPT_SET_EXPIRE = """
     return current
 """
 
-
 # # # END RATE LIMITER LUA SCRIPTS
 
 
-# needs to be run only once
 async def load_rate_limiter_scripts(redis_conn: aioredis.Redis):
     """
     Load rate limiter scripts into Redis and return their SHA hashes.
+
+    This function should be run only once at the start of the application.
 
     Args:
         redis_conn (aioredis.Redis): Redis connection object.
@@ -79,24 +83,27 @@ async def generic_rate_limiter(
     """
     A generic rate limiter that uses Redis as a storage backend.
 
-    :param parsed_limits: A list of RateLimitItem objects that define the rate limits.
-    :param key_bits: A list of key bits to be used as part of the Redis key.
-    :param redis_conn: An instance of aioredis.Redis that is used to connect to Redis.
-    :param rate_limit_lua_script_shas: A dictionary containing the SHA hashes of the Lua scripts used by the rate limiter.
-    :param limit_incr_by: The amount by which to increment the rate limit counter.
-    :return: A tuple containing a boolean indicating whether the rate limit check passed, the retry-after time in seconds,
-             and a string representation of the rate limit that was checked.
+    Args:
+        parsed_limits (List[RateLimitItem]): A list of RateLimitItem objects that define the rate limits.
+        key_bits (list): A list of key bits to be used as part of the Redis key.
+        redis_conn (aioredis.Redis): An instance of aioredis.Redis that is used to connect to Redis.
+        rate_limit_lua_script_shas (dict, optional): A dictionary containing the SHA hashes of the Lua scripts used by the rate limiter.
+        limit_incr_by (int, optional): The amount by which to increment the rate limit counter. Defaults to 1.
+
+    Returns:
+        tuple: A tuple containing:
+            - bool: Indicating whether the rate limit check passed
+            - int: The retry-after time in seconds
+            - str: A string representation of the rate limit that was checked
+
+    Raises:
+        Exception: If there's an error with Redis operations
     """
     if not rate_limit_lua_script_shas:
         rate_limit_lua_script_shas = await load_rate_limiter_scripts(redis_conn)
     redis_storage = AsyncRedisStorage(rate_limit_lua_script_shas, redis_conn)
     custom_limiter = AsyncFixedWindowRateLimiter(redis_storage)
     for each_lim in parsed_limits:
-        # window_stats = custom_limiter.get_window_stats(each_lim, key_bits)
-        # local_app_cacher_logger.debug(window_stats)
-        # rest_logger.debug('Limit {} expiry: {}', each_lim, each_lim.get_expiry())
-        # async limits rate limit check
-        # if rate limit checks out then we call
         try:
             if await custom_limiter.hit(each_lim, limit_incr_by, *[key_bits]) is False:
                 window_stats = await custom_limiter.get_window_stats(
@@ -104,7 +111,6 @@ async def generic_rate_limiter(
                     key_bits,
                 )
                 reset_in = 1 + window_stats[0]
-                # if you need information on back offs
                 retry_after = reset_in - int(time.time())
                 return False, retry_after, str(each_lim)
         except (
@@ -137,13 +143,14 @@ async def check_rpc_rate_limit(
         error_msg (str): The error message to include in the RPCException if the rate limit is exceeded.
         logger (Logger): The logger object.
         rate_limit_lua_script_shas (dict, optional): A dictionary of Lua script SHA1 hashes for rate limiting.
-        limit_incr_by (int, optional): The amount to increment the rate limit by.
+        limit_incr_by (int, optional): The amount to increment the rate limit by. Defaults to 1.
 
     Returns:
         bool: True if the rate limit has not been exceeded, False otherwise.
 
     Raises:
         RPCException: If the rate limit has been exceeded.
+        Exception: If there's an error with rate limiter operations.
     """
     key_bits = [
         app_id,

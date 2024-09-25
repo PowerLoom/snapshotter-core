@@ -9,11 +9,13 @@ from pydantic import Field
 
 
 class Auth(BaseModel):
+    """Authentication configuration model."""
     enabled: bool = Field(True, description='Whether auth is enabled or not')
     header_key: str = Field('X-API-KEY', description='Key used for auth')
 
 
 class CoreAPI(BaseModel):
+    """Core API configuration model."""
     host: str
     port: int
     auth: Auth
@@ -21,16 +23,19 @@ class CoreAPI(BaseModel):
 
 
 class RPCNodeConfig(BaseModel):
+    """RPC node configuration model."""
     url: str
 
 
 class ConnectionLimits(BaseModel):
+    """Connection limits configuration model."""
     max_connections: int = 100
     max_keepalive_connections: int = 50
     keepalive_expiry: int = 300
 
 
 class RPCConfigBase(BaseModel):
+    """Base RPC configuration model."""
     full_nodes: List[RPCNodeConfig]
     archive_nodes: Optional[List[RPCNodeConfig]]
     force_archive_blocks: Optional[int]
@@ -40,30 +45,36 @@ class RPCConfigBase(BaseModel):
 
 
 class RPCConfigFull(RPCConfigBase):
+    """Full RPC configuration model."""
     skip_epoch_threshold_blocks: int
     polling_interval: int
     semaphore_value: int = 20
 
 
 class RLimit(BaseModel):
+    """Resource limit configuration model."""
     file_descriptors: int
 
 
 class Timeouts(BaseModel):
+    """Timeout configuration model."""
     basic: int
     archival: int
     connection_init: int
 
 
 class QueueConfig(BaseModel):
+    """Queue configuration model."""
     num_instances: int
 
 
 class RabbitMQConfig(BaseModel):
+    """RabbitMQ configuration model."""
     exchange: str
 
 
 class RabbitMQSetup(BaseModel):
+    """RabbitMQ setup configuration model."""
     core: RabbitMQConfig
     callbacks: RabbitMQConfig
     event_detector: RabbitMQConfig
@@ -72,6 +83,7 @@ class RabbitMQSetup(BaseModel):
 
 
 class RabbitMQ(BaseModel):
+    """RabbitMQ connection configuration model."""
     user: str
     password: str
     host: str
@@ -80,13 +92,16 @@ class RabbitMQ(BaseModel):
 
 
 class ReportingConfig(BaseModel):
+    """Reporting configuration model."""
     slack_url: str
     service_url: str
     telegram_url: str
     telegram_chat_id: str
     failure_report_frequency: int
 
+
 class Redis(BaseModel):
+    """Redis configuration model."""
     host: str
     port: int
     db: int
@@ -96,6 +111,7 @@ class Redis(BaseModel):
 
 
 class RedisReader(BaseModel):
+    """Redis reader configuration model."""
     host: str
     port: int
     db: int
@@ -105,34 +121,40 @@ class RedisReader(BaseModel):
 
 
 class Logs(BaseModel):
+    """Logging configuration model."""
     trace_enabled: bool
     write_to_files: bool
 
 
 class EventContract(BaseModel):
+    """Event contract configuration model."""
     address: str
     abi: str
     deadline_buffer: int
     day_counter_buffer: int
 
+
 class CallbackWorkerConfig(BaseModel):
+    """Callback worker configuration model."""
     num_snapshot_workers: int
     num_aggregation_workers: int
     num_delegate_workers: int
 
 
 class IPFSWriterRateLimit(BaseModel):
+    """IPFS writer rate limit configuration model."""
     req_per_sec: int
     burst: int
 
 
 class ExternalAPIAuth(BaseModel):
-    # this is most likely used as a basic auth tuple of (username, password)
+    """External API authentication configuration model."""
     apiKey: str
-    apiSecret: str = ''
+    apiSecret: str = ''  # This is most likely used as a basic auth tuple of (username, password)
 
 
 class Web3Storage(BaseModel):
+    """Web3 storage configuration model."""
     upload_snapshots: bool
     upload_aggregates: bool
     url: str
@@ -145,23 +167,27 @@ class Web3Storage(BaseModel):
 
 
 class RelayerService(BaseModel):
+    """Relayer service configuration model."""
     host: str
     port: str
     keepalive_secs: int
 
 
 class SignerConfig(BaseModel):
+    """Signer configuration model."""
     address: str
     private_key: str
 
 
 class TxSubmissionConfig(BaseModel):
+    """Transaction submission configuration model."""
     enabled: bool = False
     # relayer: RelayerService
     signers: List[SignerConfig] = []
 
 
 class HTTPXConfig(BaseModel):
+    """HTTPX client configuration model."""
     pool_timeout: int
     connect_timeout: int
     read_timeout: int
@@ -169,6 +195,7 @@ class HTTPXConfig(BaseModel):
 
 
 class Settings(BaseModel):
+    """Main settings configuration model."""
     namespace: str
     signer_private_key: str  
     core_api: CoreAPI
@@ -197,12 +224,15 @@ class Settings(BaseModel):
 
 
 # Projects related models
+
 class ProcessorConfig(BaseModel):
+    """Processor configuration model."""
     module: str
     class_name: str
 
 
 class ProjectConfig(BaseModel):
+    """Project configuration model."""
     project_type: str
     projects: Optional[List[str]] = None
     processor: ProcessorConfig
@@ -211,19 +241,23 @@ class ProjectConfig(BaseModel):
 
 
 class ProjectsConfig(BaseModel):
+    """Projects configuration model."""
     config: List[ProjectConfig]
 
 
 class AggregateFilterConfig(BaseModel):
+    """Aggregate filter configuration model."""
     projectId: str
 
 
 class AggregateOn(str, Enum):
+    """Enumeration for aggregation types."""
     single_project = 'SingleProject'
     multi_project = 'MultiProject'
 
 
 class AggregationConfig(BaseModel):
+    """Aggregation configuration model."""
     project_type: str
     aggregate_on: AggregateOn
     filters: Optional[AggregateFilterConfig]
@@ -232,22 +266,26 @@ class AggregationConfig(BaseModel):
 
 
 class AggregatorConfig(BaseModel):
+    """Aggregator configuration model."""
     config: List[AggregationConfig]
 
 
 class Preloader(BaseModel):
+    """Preloader configuration model."""
     task_type: str
     module: str
     class_name: str
 
 
 class DelegatedTask(BaseModel):
+    """Delegated task configuration model."""
     task_type: str
     module: str
     class_name: str
 
 
 class PreloaderConfig(BaseModel):
+    """Preloader configuration model."""
     preloaders: List[Preloader]
     delegate_tasks: List[DelegatedTask]
     timeout: int

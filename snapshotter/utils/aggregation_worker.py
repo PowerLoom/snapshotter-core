@@ -27,13 +27,21 @@ from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 
 
 class AggregationAsyncWorker(GenericAsyncWorker):
+    """
+    A worker class for asynchronous aggregation tasks.
+
+    This class extends GenericAsyncWorker and provides functionality for
+    processing aggregation tasks, managing IPFS clients, and handling
+    project-specific calculations.
+    """
+
     _ipfs_singleton: AsyncIPFSClientSingleton
     _ipfs_writer_client: AsyncIPFSClient
     _ipfs_reader_client: AsyncIPFSClient
 
     def __init__(self, name, **kwargs):
         """
-        Initializes an instance of AggregationAsyncWorker.
+        Initialize an instance of AggregationAsyncWorker.
 
         Args:
             name (str): The name of the worker.
@@ -49,6 +57,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         self._multi_project_types = set()
         self._task_types = set()
 
+        # Categorize project types based on aggregation configuration
         for config in aggregator_config:
             if config.aggregate_on == AggregateOn.single_project:
                 self._single_project_types.add(config.project_type)
@@ -58,7 +67,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     def _gen_single_type_project_id(self, task_type, epoch):
         """
-        Generates a project ID for a single task type and epoch.
+        Generate a project ID for a single task type and epoch.
 
         Args:
             task_type (str): The task type.
@@ -73,7 +82,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     def _gen_multiple_type_project_id(self, task_type, epoch):
         """
-        Generates a unique project ID based on the task type and epoch messages.
+        Generate a unique project ID based on the task type and epoch messages.
 
         Args:
             task_type (str): The type of task.
@@ -92,7 +101,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     def _gen_project_id(self, task_type, epoch):
         """
-        Generates a project ID based on the given task type and epoch.
+        Generate a project ID based on the given task type and epoch.
 
         Args:
             task_type (str): The type of task.
@@ -119,6 +128,9 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         """
         Process the given message object and task type.
 
+        This method handles the core logic of processing a task, including
+        error handling, state updates, and snapshot creation.
+
         Args:
             msg_obj (Union[PowerloomSnapshotSubmittedMessage, PowerloomCalculateAggregateMessage]):
                 The message object to be processed.
@@ -143,6 +155,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         project_id = self._gen_project_id(task_type, msg_obj)
 
         try:
+            # Load rate limiting scripts if not already loaded
             if not self._rate_limiting_lua_scripts:
                 self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
                     self._redis_conn,
@@ -154,6 +167,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
             task_processor = self._project_calculation_mapping[task_type]
 
+            # Compute the snapshot
             snapshot = await task_processor.compute(
                 msg_obj=msg_obj,
                 redis=self._redis_conn,
@@ -164,11 +178,13 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 project_id=project_id,
             )
 
+            # Apply transformation lambdas if any
             if task_processor.transformation_lambdas:
                 for each_lambda in task_processor.transformation_lambdas:
                     snapshot = each_lambda(snapshot, msg_obj)
 
         except Exception as e:
+            # Handle exceptions during processing
             self._logger.opt(exception=settings.logs.trace_enabled).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
@@ -185,6 +201,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 client=self._client, message=notification_message,
             )
 
+            # Update Redis with failure state
             await self._redis_conn.hset(
                 name=epoch_id_project_to_state_mapping(
                     epoch_id=msg_obj.epochId, state_id=SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -197,6 +214,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             )
         else:
             if not snapshot:
+                # Handle empty snapshot case
                 await self._redis_conn.hset(
                     name=epoch_id_project_to_state_mapping(
                         epoch_id=msg_obj.epochId, state_id=SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -219,6 +237,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                     client=self._client, message=notification_message,
                 )
             else:
+                # Handle successful snapshot case
                 await self._redis_conn.hset(
                     name=epoch_id_project_to_state_mapping(
                         epoch_id=msg_obj.epochId, state_id=SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -245,7 +264,10 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     async def _on_rabbitmq_message(self, message: IncomingMessage):
         """
-        Callback function to handle incoming RabbitMQ messages.
+        Handle incoming RabbitMQ messages.
+
+        This method processes incoming messages, validates their structure,
+        and initiates the appropriate task processing.
 
         Args:
             message (IncomingMessage): The incoming RabbitMQ message.
@@ -262,7 +284,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         await self.init_worker()
 
         self._logger.debug('task type: {}', task_type)
-        # TODO: Update based on new single project based design
+        # Process message based on task type
         if task_type in self._single_project_types:
             try:
                 msg_obj: PowerloomSnapshotSubmittedMessage = PowerloomSnapshotSubmittedMessage.parse_raw(message.body)
@@ -320,8 +342,11 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     async def _init_project_calculation_mapping(self):
         """
-        Initializes the project calculation mapping by importing the processor module and class for each project type
-        specified in the aggregator and projects configuration. Raises an exception if a duplicate project type is found.
+        Initialize the project calculation mapping.
+
+        This method imports the processor module and class for each project type
+        specified in the aggregator and projects configuration. It raises an
+        exception if a duplicate project type is found.
         """
         if self._project_calculation_mapping is not None:
             return
@@ -344,7 +369,9 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     async def _init_ipfs_client(self):
         """
-        Initializes the IPFS client and sets the write and read clients for the class.
+        Initialize the IPFS client.
+
+        This method sets up the IPFS singleton and initializes the write and read clients.
         """
         self._ipfs_singleton = AsyncIPFSClientSingleton(settings.ipfs)
         await self._ipfs_singleton.init_sessions()
@@ -353,7 +380,10 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     async def init_worker(self):
         """
-        Initializes the worker by initializing project calculation mapping, IPFS client, and other necessary components.
+        Initialize the worker.
+
+        This method sets up the project calculation mapping, IPFS client,
+        and other necessary components for the worker to function.
         """
         if not self._initialized:
             await self._init_project_calculation_mapping()

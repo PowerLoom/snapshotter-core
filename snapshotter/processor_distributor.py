@@ -76,6 +76,13 @@ from snapshotter.utils.rpc import RpcHelper
 
 
 class ProcessorDistributor(multiprocessing.Process):
+    """
+    A class responsible for distributing processing tasks and managing the snapshot lifecycle.
+    
+    This class handles epoch releases, project updates, snapshot submissions, and aggregations.
+    It interacts with RabbitMQ for message passing and Redis for state management.
+    """
+
     _aioredis_pool: RedisPoolCache
     _redis_conn: aioredis.Redis
     _rpc_helper: RpcHelper 
@@ -89,6 +96,7 @@ class ProcessorDistributor(multiprocessing.Process):
     _last_synced_slot_info: int
     _source_chain_epoch_size: int
     _source_chain_id: int
+
     def __init__(self, name, **kwargs):
         """
         Initialize the ProcessorDistributor object.
@@ -172,7 +180,6 @@ class ProcessorDistributor(multiprocessing.Process):
             signum (int): The signal number.
             frame (frame): The current stack frame at the time the signal was received.
         """
-
         if signum in [SIGINT, SIGTERM, SIGQUIT]:
             self._core_rmq_consumer.cancel()
 
@@ -277,6 +284,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     preloader_module,
                     preloader.task_type
                 )
+
     async def _init_protocol_meta(self):
         """
         Initializes the protocol metadata by fetching the source chain epoch size and source chain ID.
@@ -348,7 +356,6 @@ class ProcessorDistributor(multiprocessing.Process):
             await self._init_protocol_meta()
             self._initialized = True
 
-  
     async def _get_proc_hub_start_time(self) -> int:
         """
         Retrieves the start time of the process hub core from Redis.
@@ -376,7 +383,6 @@ class ProcessorDistributor(multiprocessing.Process):
         Returns:
             None
         """
-
         preloader_types_l = list(self._preload_completion_conditions[epoch.epochId].keys())
         conditions: List[Awaitable] = [
             self._preload_completion_conditions[epoch.epochId][k]
@@ -470,8 +476,8 @@ class ProcessorDistributor(multiprocessing.Process):
         Returns:
             None
         """
-        # cleanup previous preloading complete tasks and events
-        # start all preload tasks
+        # Cleanup previous preloading complete tasks and events
+        # Start all preload tasks
         self._logger.debug('Starting all preload tasks for epoch {}: {}', msg_obj.epochId, self._all_preload_tasks)
         for preloader in preloaders:
             if preloader.task_type in self._all_preload_tasks:
@@ -497,7 +503,7 @@ class ProcessorDistributor(multiprocessing.Process):
                 )
         for project_type, project_config in self._project_type_config_mapping.items():
             if not project_config.preload_tasks:
-                # release for snapshotting
+                # Release for snapshotting
                 asyncio.ensure_future(
                     self._distribute_callbacks_snapshotting(
                         project_type, msg_obj,
@@ -551,7 +557,7 @@ class ProcessorDistributor(multiprocessing.Process):
         Returns:
             None
         """
-        # send to snapshotters to get the balances of the addresses
+        # Send to snapshotters to get the balances of the addresses
         queuing_tasks = []
 
         async with self._rmq_channel_pool.acquire() as ch:
@@ -562,7 +568,7 @@ class ProcessorDistributor(multiprocessing.Process):
 
             project_config = self._project_type_config_mapping[project_type]
 
-            # handling bulk mode projects
+            # Handling bulk mode projects
             if project_config.bulk_mode:
                 process_unit = PowerloomSnapshotProcessMessage(
                     begin=epoch.begin,
@@ -583,7 +589,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     f' {project_type} : {process_unit}',
                 )
                 return
-            # handling projects with no data sources
+            # Handling projects with no data sources
             if project_config.projects is None:
                 project_id = f'{project_type}:{settings.namespace}'
                 if project_id.lower() in self._newly_added_projects:
@@ -610,7 +616,7 @@ class ProcessorDistributor(multiprocessing.Process):
                 )
                 return
             static_source_project_ids = list()
-            # handling projects with data sources
+            # Handling projects with data sources
             for project in project_config.projects:
                 project_id = f'{project_type}:{project}:{settings.namespace}'
                 static_source_project_ids.append(project_id)
@@ -661,10 +667,11 @@ class ProcessorDistributor(multiprocessing.Process):
         """
         Enables pending projects for the given epoch ID and returns a set of project IDs that were allowed.
 
-        :param epoch_id: The epoch ID for which to enable pending projects.
-        :type epoch_id: Any
-        :return: A set of project IDs that were allowed.
-        :rtype: set
+        Args:
+            epoch_id: The epoch ID for which to enable pending projects.
+
+        Returns:
+            A set of project IDs that were allowed.
         """
         pending_project_msgs: List[PowerloomProjectsUpdatedMessage] = self._upcoming_project_changes.pop(epoch_id, [])
         if not pending_project_msgs:

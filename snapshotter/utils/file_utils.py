@@ -25,25 +25,27 @@ def read_json_file(
 
     Raises:
         FileNotFoundError: If the specified file does not exist.
+        Exception: If there's an error opening or reading the file.
     """
-    # check if file is present
+    # Check if file exists
     if not os.path.exists(file_path):
         raise FileNotFoundError(f'File {file_path} not found')
 
     try:
-        f_ = open(file_path, 'r', encoding='utf-8')
+        # Attempt to open the file
+        with open(file_path, 'r', encoding='utf-8') as f_:
+            json_data = json.load(f_)
+            
+            # Handle cases where the JSON might be nested in strings
+            while not isinstance(json_data, dict) and isinstance(json_data, str):
+                json_data = json.loads(json_data)
+            
+            return json_data
     except Exception as exc:
-        logger.warning(f'Unable to open the {file_path} file')
+        logger.warning(f'Unable to open or read the {file_path} file')
         if settings.logs.trace_enabled:
             logger.opt(exception=True).error(exc)
         raise exc
-    else:
-        json_data = json.load(f_)
-        if type(json_data) != dict:
-            # logger.warning(f'Upon JSON decoding File {file_path}, content does not contain a dictionary. Actual content: {json_data}')
-            while type(json_data) != dict and type(json_data) == str:
-                json_data = json.loads(json_data)
-        return json_data
 
 
 def write_json_file(
@@ -62,24 +64,27 @@ def write_json_file(
         logger (logger, optional): The logger object to be used for logging. Defaults to logger.
 
     Raises:
-        Exception: If there is an error while writing to the file.
+        Exception: If there is an error while creating the directory or writing to the file.
 
     Returns:
         None
     """
+    file_path = os.path.join(directory, file_name)
+    
     try:
-        file_path = os.path.join(directory, file_name)
+        # Create directory if it doesn't exist
         if not os.path.exists(directory):
             os.makedirs(directory)
-        f_ = open(file_path, 'w', encoding='utf-8')
+        
+        # Write data to file
+        with open(file_path, 'w', encoding='utf-8') as f_:
+            json.dump(data, f_, ensure_ascii=False, indent=4)
     except Exception as exc:
         logger.error(f'Unable to write to file {file_path}')
         raise exc
-    else:
-        json.dump(data, f_, ensure_ascii=False, indent=4)
 
 
-def write_bytes_to_file(directory: str, file_name: str, data):
+def write_bytes_to_file(directory: str, file_name: str, data: bytes) -> None:
     """
     Write bytes to a file in the specified directory.
 
@@ -89,26 +94,28 @@ def write_bytes_to_file(directory: str, file_name: str, data):
         data (bytes): The bytes to be written to the file.
 
     Raises:
-        Exception: If the file cannot be opened.
+        Exception: If the directory cannot be created or the file cannot be opened/written.
 
     Returns:
         None
     """
+    file_path = os.path.join(directory, file_name)
+    
     try:
-        file_path = directory + file_name
+        # Create directory if it doesn't exist
         if not os.path.exists(directory):
             os.makedirs(directory)
-        file_obj = open(file_path, 'wb')
+        
+        # Write bytes to file
+        with open(file_path, 'wb') as file_obj:
+            bytes_written = file_obj.write(data)
+            logger.debug('Wrote {} bytes to file {}', bytes_written, file_path)
     except Exception as exc:
-        logger.opt(exception=True).error('Unable to open the {} file', file_path)
+        logger.opt(exception=True).error('Unable to open or write to the {} file', file_path)
         raise exc
-    else:
-        bytes_written = file_obj.write(data)
-        logger.debug('Wrote {} bytes to file {}', bytes_written, file_path)
-        file_obj.close()
 
 
-def read_text_file(file_path: str):
+def read_text_file(file_path: str) -> str | None:
     """
     Read the given file and return the contents as a string.
 
@@ -116,14 +123,14 @@ def read_text_file(file_path: str):
         file_path (str): The path to the file to be read.
 
     Returns:
-        str: The contents of the file as a string, or None if the file could not be read.
+        str | None: The contents of the file as a string, or None if the file could not be read.
     """
     try:
-        file_obj = open(file_path, 'r', encoding='utf-8')
+        with open(file_path, 'r', encoding='utf-8') as file_obj:
+            return file_obj.read()
     except FileNotFoundError:
+        logger.warning('File not found: {}', file_path)
         return None
     except Exception as exc:
         logger.opt(exception=True).warning('Unable to open the {} file because of exception: {}', file_path, exc)
         return None
-    else:
-        return file_obj.read()

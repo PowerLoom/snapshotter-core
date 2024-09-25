@@ -1,24 +1,38 @@
 import json
 
 
-class SelfExitException(
-    Exception,
-):
+class SelfExitException(Exception):
     """
     Exception used by process hub core to signal core exit.
+
+    This exception is raised when the process hub core needs to indicate
+    that it should exit gracefully.
     """
     pass
 
 
 class GenericExitOnSignal(Exception):
-    """Exception to be used whenever any other launched process/callback worker receives a signal to 'exit' - [INT, TERM, QUIT]"""
+    """
+    Exception to be used when a process or callback worker receives an exit signal.
+
+    This exception is raised when a launched process or callback worker
+    receives a signal to 'exit', such as SIGINT, SIGTERM, or SIGQUIT.
+    """
     pass
 
 
 class RPCException(Exception):
+    """
+    Exception class for handling RPC (Remote Procedure Call) related errors.
+
+    This exception encapsulates information about an RPC error, including
+    the original request, the response received, the underlying exception,
+    and any additional information.
+    """
+
     def __init__(self, request, response, underlying_exception, extra_info):
         """
-        Initializes a new instance of the ApiException class.
+        Initialize a new instance of the RPCException class.
 
         :param request: The request that caused the exception.
         :type request: Any
@@ -35,19 +49,31 @@ class RPCException(Exception):
         self.extra_info = extra_info
 
     def __str__(self):
-        """Return a JSON string representation of the exception object."""
+        """
+        Return a JSON string representation of the exception object.
+
+        :return: A JSON-formatted string containing exception details.
+        :rtype: str
+        """
+        # Create a dictionary with exception details
         ret = {
             'request': self.request,
             'response': self.response,
             'extra_info': self.extra_info,
             'exception': None,
         }
+        # Include the underlying exception if it exists
         if isinstance(self.underlying_exception, Exception):
-            ret.update({'exception': self.underlying_exception.__str__()})
+            ret.update({'exception': str(self.underlying_exception)})
         return json.dumps(ret)
 
     def __repr__(self):
         """
         Return a string representation of the exception.
+
+        This method returns the same output as __str__ for consistency.
+
+        :return: A string representation of the exception.
+        :rtype: str
         """
         return self.__str__()

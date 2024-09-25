@@ -13,16 +13,44 @@ import snapshotter.utils.models.proto.snapshot_submission.submission_pb2
 
 
 class SubmissionBase(abc.ABC):
+    """
+    Abstract base class for the Submission service.
+    Defines the interface for snapshot submission operations.
+    """
 
     @abc.abstractmethod
     async def SubmitSnapshotSimulation(self, stream: 'grpclib.server.Stream[snapshotter.utils.models.proto.snapshot_submission.submission_pb2.SnapshotSubmission, snapshotter.utils.models.proto.snapshot_submission.submission_pb2.SubmissionResponse]') -> None:
+        """
+        Submit a snapshot simulation.
+
+        Args:
+            stream: A bidirectional streaming RPC for submitting snapshot simulations.
+
+        Returns:
+            None
+        """
         pass
 
     @abc.abstractmethod
     async def SubmitSnapshot(self, stream: 'grpclib.server.Stream[snapshotter.utils.models.proto.snapshot_submission.submission_pb2.SnapshotSubmission, snapshotter.utils.models.proto.snapshot_submission.submission_pb2.SubmissionResponse]') -> None:
+        """
+        Submit a snapshot.
+
+        Args:
+            stream: A client-streaming RPC for submitting snapshots.
+
+        Returns:
+            None
+        """
         pass
 
     def __mapping__(self) -> typing.Dict[str, grpclib.const.Handler]:
+        """
+        Define the mapping between RPC method names and their handlers.
+
+        Returns:
+            A dictionary mapping RPC method names to their corresponding handlers.
+        """
         return {
             '/submission.Submission/SubmitSnapshotSimulation': grpclib.const.Handler(
                 self.SubmitSnapshotSimulation,
@@ -40,8 +68,18 @@ class SubmissionBase(abc.ABC):
 
 
 class SubmissionStub:
+    """
+    Client-side stub for the Submission service.
+    Provides methods for making RPC calls to the server.
+    """
 
     def __init__(self, channel: grpclib.client.Channel) -> None:
+        """
+        Initialize the SubmissionStub.
+
+        Args:
+            channel: The gRPC channel to use for communication with the server.
+        """
         self.SubmitSnapshotSimulation = grpclib.client.StreamStreamMethod(
             channel,
             '/submission.Submission/SubmitSnapshotSimulation',
