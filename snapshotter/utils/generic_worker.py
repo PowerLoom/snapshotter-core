@@ -10,6 +10,7 @@ from signal import signal
 from signal import SIGQUIT
 from signal import SIGTERM
 from typing import Dict
+from typing import List
 from typing import Set
 from typing import Union
 from uuid import uuid4
@@ -28,6 +29,7 @@ from eip712_structs import Uint
 from eth_utils.crypto import keccak
 from eth_utils.encoding import big_endian_to_int
 from grpclib.client import Channel
+from grpclib.exceptions import StreamTerminatedError
 from httpx import AsyncClient
 from httpx import AsyncHTTPTransport
 from httpx import Limits
@@ -148,6 +150,46 @@ def ipfs_upload_retry_state_callback(retry_state: tenacity.RetryCallState):
         )
 
 
+class StreamPool:
+    def __init__(self, grpc_stub, pool_size=3, max_stream_age=3600):
+        self._grpc_stub = grpc_stub
+        self.pool_size = pool_size
+        self.max_stream_age = max_stream_age
+        self.streams: List[Dict] = []
+        self.lock = asyncio.Lock()
+
+    async def get_stream(self):
+        async with self.lock:
+            if not self.streams:
+                return await self._create_stream()
+
+            # Try to find a non-expired stream
+            for stream in self.streams:
+                if (asyncio.get_event_loop().time() - stream['created_at']) < self.max_stream_age:
+                    return stream['stream']
+
+            # If all streams are expired, create a new one
+            return await self._create_stream()
+
+    async def _create_stream(self):
+        stream = await self._grpc_stub.SubmitSnapshot.open()
+        stream_info = {
+            'stream': stream,
+            'created_at': asyncio.get_event_loop().time(),
+        }
+        self.streams.append(stream_info)
+        if len(self.streams) > self.pool_size:
+            oldest_stream = min(self.streams, key=lambda s: s['created_at'])
+            self.streams.remove(oldest_stream)
+            await oldest_stream['stream'].close()
+        return stream
+
+    async def close_all(self):
+        for stream_info in self.streams:
+            await stream_info['stream'].close()
+        self.streams.clear()
+
+
 class GenericAsyncWorker(multiprocessing.Process):
     """
     A generic asynchronous worker class for handling various tasks related to snapshot processing and submission.
@@ -192,6 +234,30 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._active_tasks: Set[asyncio.Task] = set()
         self._task_timeout = 300  # 5 minutes
         self._task_cleanup_interval = 60  # 1 minute
+        self.stream_manager_task = None
+
+    async def start_stream_manager(self):
+        self.stream_manager_task = asyncio.create_task(self._manage_streams())
+
+    async def _manage_streams(self):
+        while True:
+            await asyncio.sleep(60)  # Check every minute
+            async with self.stream_pool.lock:
+                current_time = asyncio.get_event_loop().time()
+                for stream_info in self.stream_pool.streams[:]:
+                    if (current_time - stream_info['created_at']) >= self.stream_pool.max_stream_age:
+                        await stream_info['stream'].close()
+                        self.stream_pool.streams.remove(stream_info)
+                        await self.stream_pool._create_stream()
+
+    async def cleanup(self):
+        if self.stream_manager_task:
+            self.stream_manager_task.cancel()
+            try:
+                await self.stream_manager_task
+            except asyncio.CancelledError:
+                pass
+        await self.stream_pool.close_all()
 
     def _signal_handler(self, signum, frame):
         """
@@ -488,6 +554,19 @@ class GenericAsyncWorker(multiprocessing.Process):
         await self._aioredis_pool.populate()
         self._redis_conn = self._aioredis_pool._aioredis_pool
 
+    @retry(
+        wait=wait_random_exponential(multiplier=1, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(Exception),
+    )
+    async def _get_chain_id(self):
+        """
+        Gets the chain ID for the worker.
+        """
+        self._chain_id = await self._w3.eth.chain_id
+        self._logger.debug('Set anchor chain ID to {}', self._chain_id)
+        return self._chain_id
+
     async def _init_rpc_helper(self):
         """
         Initializes the RpcHelper objects for the worker and anchor chain, and sets up the protocol state contract.
@@ -506,9 +585,9 @@ class GenericAsyncWorker(multiprocessing.Process):
                 self._logger,
             ),
         )
-
         self._w3 = self._anchor_rpc_helper._nodes[0]['web3_client_async']
-        self._chain_id = await self._w3.eth.chain_id
+
+        self._chain_id = await self._get_chain_id()
         self._logger.debug('Set anchor chain ID to {}', self._chain_id)
         self._domain_separator = make_domain(
             name='PowerloomProtocolContract', version='0.1', chainId=self._chain_id,
@@ -655,13 +734,27 @@ class GenericAsyncWorker(multiprocessing.Process):
                 except:
                     raise Exception(f'Failed to send simulation snapshot: {msg}')
         else:
-            try:
-                async with self.open_stream() as stream:
+            # try:
+            #     async with self.open_stream() as stream:
+            #         await stream.send_message(msg)
+            #         self._logger.debug(f'Sent message: {msg}')
+            #         return {'status_code': 200}
+            # except Exception as e:
+            #     raise Exception(f'Failed to send message: {e}')
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    stream = await self.stream_pool.get_stream()
                     await stream.send_message(msg)
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
-            except Exception as e:
-                raise Exception(f'Failed to send message: {e}')
+                except StreamTerminatedError as e:
+                    self._logger.warning(f'Stream terminated while sending message. Retrying... Error: {e}')
+                    if attempt == max_retries - 1:
+                        raise Exception(f'Failed to send message after {max_retries} attempts: {e}')
+                except Exception as e:
+                    self._logger.error(f'Failed to send message: {e}')
+                    raise Exception(f'Failed to send message: {e}')
 
     async def _init_grpc(self):
         """
@@ -673,6 +766,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             ssl=False,
         )
         self._grpc_stub = SubmissionStub(self._grpc_channel)
+        self.stream_pool = StreamPool(self._grpc_stub)
         self._stream = None
         self._cancel_task = None
 
