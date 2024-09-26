@@ -10,6 +10,7 @@ from signal import signal
 from signal import SIGQUIT
 from signal import SIGTERM
 from typing import Dict
+from typing import Set
 from typing import Union
 from uuid import uuid4
 
@@ -151,6 +152,7 @@ class GenericAsyncWorker(multiprocessing.Process):
     """
     A generic asynchronous worker class for handling various tasks related to snapshot processing and submission.
     """
+    _active_tasks: Set[asyncio.Task]
 
     def __init__(self, name, signer_idx, **kwargs):
         """
@@ -186,6 +188,10 @@ class GenericAsyncWorker(multiprocessing.Process):
             self._private_key = self._private_key[2:]
         self._identity_private_key = PrivateKey.from_hex(settings.signer_private_key)
         self._initialized = False
+        # Task tracking
+        self._active_tasks: Set[asyncio.Task] = set()
+        self._task_timeout = 300  # 5 minutes
+        self._task_cleanup_interval = 60  # 1 minute
 
     def _signal_handler(self, signum, frame):
         """
@@ -730,6 +736,8 @@ class GenericAsyncWorker(multiprocessing.Process):
             await self._init_rpc_helper()
             await self._init_protocol_meta()
             await self._init_grpc()
+            asyncio.create_task(self._cleanup_tasks())
+
         self._initialized = True
 
     def run(self) -> None:
@@ -756,3 +764,18 @@ class GenericAsyncWorker(multiprocessing.Process):
             ev_loop.run_forever()
         finally:
             ev_loop.close()
+
+    async def _cleanup_tasks(self):
+        """
+        Periodically clean up completed or timed-out tasks.
+        """
+        while True:
+            await asyncio.sleep(self._task_cleanup_interval)
+            current_time = time.time()
+            for task in list(self._active_tasks):
+                if task.done():
+                    self._active_tasks.discard(task)
+                elif current_time - task.get_coro().cr_frame.f_locals.get('start_time', 0) > self._task_timeout:
+                    self._logger.warning(f'Task {task} timed out. Cancelling...')
+                    task.cancel()
+                    self._active_tasks.discard(task)

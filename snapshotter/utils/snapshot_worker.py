@@ -184,7 +184,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             await p.execute()
 
             # Commit payload asynchronously
-            asyncio.ensure_future(
+            task = asyncio.create_task(
                 self._commit_payload(
                     task_type=task_type,
                     _ipfs_writer_client=self._ipfs_writer_client,
@@ -194,6 +194,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     storage_flag=settings.web3storage.upload_snapshots,
                 ),
             )
+            self._active_tasks.add(task)
+            task.add_done_callback(self._active_tasks.discard)
 
     async def _process_bulk_mode(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
@@ -223,8 +225,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 self._logger.debug(
                     'No snapshot data for: {}, skipping...', msg_obj,
                 )
-
-            # Note: Transformation lambdas are not applied in bulk mode
 
         except Exception as e:
             # Handle exceptions during bulk snapshot processing
@@ -313,7 +313,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 await p.execute()
 
                 # Commit payload asynchronously
-                asyncio.ensure_future(
+                task = asyncio.create_task(
                     self._commit_payload(
                         task_type=task_type,
                         _ipfs_writer_client=self._ipfs_writer_client,
@@ -323,8 +323,10 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                         storage_flag=settings.web3storage.upload_snapshots,
                     ),
                 )
+                self._active_tasks.add(task)
+                task.add_done_callback(self._active_tasks.discard)
 
-    async def _processor_task(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
+    async def _process_task(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
         Process a PowerloomSnapshotProcessMessage object for a given task type.
 
@@ -407,7 +409,9 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             return
 
         # Start the processor task
-        asyncio.ensure_future(self._processor_task(msg_obj=msg_obj, task_type=task_type))
+        task = asyncio.create_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
+        self._active_tasks.add(task)
+        task.add_done_callback(self._active_tasks.discard)
 
     async def _init_project_calculation_mapping(self):
         """

@@ -243,7 +243,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                         ).json(),
                     },
                 )
-                asyncio.ensure_future(
+                commit_task = asyncio.create_task(
                     self._commit_payload(
                         task_type=task_type,
                         project_id=project_id,
@@ -253,6 +253,8 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                         _ipfs_writer_client=self._ipfs_writer_client,
                     ),
                 )
+                self._active_tasks.add(commit_task)
+                commit_task.add_done_callback(self._active_tasks.discard)
             self._logger.debug(
                 'Updated epoch processing status in aggregation worker for project {} for transition {}',
                 project_id, SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -335,7 +337,9 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 'Unknown task type {}', task_type,
             )
             return
-        asyncio.ensure_future(self._processor_task(msg_obj=msg_obj, task_type=task_type))
+        task = asyncio.create_task(self._processor_task(msg_obj=msg_obj, task_type=task_type))
+        self._active_tasks.add(task)
+        task.add_done_callback(self._active_tasks.discard)
 
     async def _init_project_calculation_mapping(self):
         """
