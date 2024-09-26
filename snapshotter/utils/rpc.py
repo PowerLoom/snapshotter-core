@@ -170,7 +170,7 @@ class RpcHelper(object):
             ),
         )
         self._client = AsyncClient(
-            timeout=Timeout(timeout=5.0),
+            timeout=Timeout(timeout=15.0),
             follow_redirects=False,
             transport=self._async_transport,
         )
