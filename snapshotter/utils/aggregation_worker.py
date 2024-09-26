@@ -178,11 +178,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 project_id=project_id,
             )
 
-            # Apply transformation lambdas if any
-            if task_processor.transformation_lambdas:
-                for each_lambda in task_processor.transformation_lambdas:
-                    snapshot = each_lambda(snapshot, msg_obj)
-
         except Exception as e:
             # Handle exceptions during processing
             self._logger.opt(exception=settings.logs.trace_enabled).error(
@@ -248,14 +243,16 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                         ).json(),
                     },
                 )
-                asyncio.ensure_future(self._commit_payload(
-                    task_type=task_type,
-                    project_id=project_id,
-                    epoch=msg_obj,
-                    snapshot=snapshot,
-                    storage_flag=settings.web3storage.upload_aggregates,
-                    _ipfs_writer_client=self._ipfs_writer_client,
-                ))
+                asyncio.ensure_future(
+                    self._commit_payload(
+                        task_type=task_type,
+                        project_id=project_id,
+                        epoch=msg_obj,
+                        snapshot=snapshot,
+                        storage_flag=settings.web3storage.upload_aggregates,
+                        _ipfs_writer_client=self._ipfs_writer_client,
+                    ),
+                )
             self._logger.debug(
                 'Updated epoch processing status in aggregation worker for project {} for transition {}',
                 project_id, SnapshotterStates.SNAPSHOT_BUILD.value,

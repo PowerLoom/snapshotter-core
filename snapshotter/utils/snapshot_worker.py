@@ -110,11 +110,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     'No snapshot data for: {}, skipping...', msg_obj,
                 )
 
-            # Apply transformation lambdas if any
-            if task_processor.transformation_lambdas and snapshot:
-                for each_lambda in task_processor.transformation_lambdas:
-                    snapshot = each_lambda(snapshot, msg_obj.data_source, msg_obj.begin, msg_obj.end)
-
         except Exception as e:
             # Handle exceptions during snapshot processing
             self._logger.opt(exception=settings.logs.trace_enabled).error(

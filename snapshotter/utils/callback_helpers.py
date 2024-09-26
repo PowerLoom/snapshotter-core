@@ -19,7 +19,8 @@ from redis import asyncio as aioredis
 
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
-from snapshotter.utils.models.data_models import SnapshotterIssue, TelegramEpochProcessingReportMessage
+from snapshotter.utils.models.data_models import SnapshotterIssue
+from snapshotter.utils.models.data_models import TelegramEpochProcessingReportMessage
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
@@ -185,7 +186,7 @@ def send_failure_notifications_sync(client: SyncClient, message: SnapshotterIssu
             json=message.dict(),
         )
         sync_notification_callback_result_handler(f)
-    
+
     # Send notification to Telegram if configured
     if settings.reporting.telegram_url and settings.reporting.telegram_chat_id:
         reporting_message = TelegramEpochProcessingReportMessage(
@@ -209,13 +210,6 @@ class GenericProcessorSnapshot(ABC):
     __metaclass__ = ABCMeta
 
     def __init__(self):
-        pass
-
-    @abstractproperty
-    def transformation_lambdas(self):
-        """
-        Abstract property for transformation lambdas.
-        """
         pass
 
     @abstractmethod
@@ -360,13 +354,6 @@ class GenericProcessorAggregate(ABC):
     __metaclass__ = ABCMeta
 
     def __init__(self):
-        pass
-
-    @abstractproperty
-    def transformation_lambdas(self):
-        """
-        Abstract property for transformation lambdas.
-        """
         pass
 
     @abstractmethod
