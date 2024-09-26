@@ -43,7 +43,6 @@ services:
       - ./config:/config
       - ./computes:/computes
       - ./snapshotter:/snapshotter
-      - local_cache:/home/ubuntu/local_cache/
     environment:
       - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
       - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
@@ -158,5 +157,3 @@ networks:
 volumes:
   ipfs_data:
     name: ipfs_data
-  local_cache:
-    name: local_cache

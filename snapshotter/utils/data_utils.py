@@ -29,7 +29,8 @@ from snapshotter.utils.redis.redis_keys import project_snapshotter_status_report
 from snapshotter.utils.redis.redis_keys import source_chain_block_time_key
 from snapshotter.utils.redis.redis_keys import source_chain_epoch_size_key
 from snapshotter.utils.redis.redis_keys import source_chain_id_key
-from snapshotter.utils.rpc import RpcHelper, get_event_sig_and_abi
+from snapshotter.utils.rpc import get_event_sig_and_abi
+from snapshotter.utils.rpc import RpcHelper
 
 logger = logger.bind(module='data_helper')
 
@@ -127,7 +128,7 @@ async def w3_get_and_cache_finalized_cid(
     [consensus_status, cid] = await rpc_helper.web3_call(
         tasks=[
             ('snapshotStatus', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
-            ('maxSnapshotsCid', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id])
+            ('maxSnapshotsCid', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
         ],
         contract_addr=state_contract_obj.address,
         abi=state_contract_obj.abi,
@@ -184,7 +185,7 @@ async def get_project_first_epoch(redis_conn: aioredis.Redis, state_contract_obj
             abi=state_contract_obj.abi,
         )
         logger.info(f'first epoch for project {project_id} is {first_epoch}')
-        
+
         # Cache the result if it's not 0
         if first_epoch != 0:
             await redis_conn.hset(
@@ -238,24 +239,13 @@ async def get_submission_data(redis_conn: aioredis.Redis, cid, ipfs_reader, proj
     if not cid or 'null' in cid:
         return dict()
 
-    cached_data_path = os.path.join(settings.ipfs.local_cache_path, project_id, 'snapshots')
-    filename = f'{cid}.json'
     try:
-        # Attempt to read from local cache
-        submission_data = read_json_file(os.path.join(cached_data_path, filename))
-    except Exception as e:
-        # If local cache read fails, fetch from IPFS
-        logger.trace('Error while reading from cache', error=e)
-        logger.info('Project {} CID {}, fetching data from IPFS', project_id, cid)
-        try:
-            submission_data = await fetch_file_from_ipfs(ipfs_reader, cid)
-        except:
-            logger.error('Error while fetching data from IPFS | Project {} | CID {}', project_id, cid)
-            submission_data = dict()
-        else:
-            # Cache the fetched data locally
-            write_json_file(cached_data_path, filename, submission_data)
-            submission_data = json.loads(submission_data)
+        submission_data = await fetch_file_from_ipfs(ipfs_reader, cid)
+        submission_data = json.loads(submission_data)
+    except:
+        logger.error('Error while fetching data from IPFS | Project {} | CID {}', project_id, cid)
+        submission_data = dict()
+
     return submission_data
 
 
@@ -281,7 +271,7 @@ async def get_submission_data_bulk(
     """
     batch_size = 10
     all_snapshot_data = []
-    
+
     # Process submissions in batches
     for i in range(0, len(cids), batch_size):
         batch_cids = cids[i:i + batch_size]
@@ -348,10 +338,10 @@ async def get_source_chain_id(redis_conn: aioredis.Redis, state_contract_obj, rp
         # If not in cache, fetch from blockchain
         [source_chain_id] = await rpc_helper.web3_call(
             tasks=[
-                ('SOURCE_CHAIN_ID', [Web3.to_checksum_address(settings.data_market)])
+                ('SOURCE_CHAIN_ID', [Web3.to_checksum_address(settings.data_market)]),
             ],
             contract_addr=state_contract_obj.address,
-            abi=state_contract_obj.abi
+            abi=state_contract_obj.abi,
         )
 
         # Cache the result in Redis
@@ -444,7 +434,7 @@ async def get_projects_list(redis_conn: aioredis.Redis, state_contract_obj, rpc_
         [projects_list] = await rpc_helper.web3_call(
             tasks=[('getProjects', [])],
             contract_addr=state_contract_obj.address,
-            abi=state_contract_obj.abi
+            abi=state_contract_obj.abi,
         )
         return projects_list
 
@@ -468,7 +458,7 @@ async def get_snapshot_submision_window(redis_conn: aioredis.Redis, state_contra
     [submission_window] = await rpc_helper.web3_call(
         tasks=[('snapshotSubmissionWindow', [Web3.to_checksum_address(settings.data_market)])],
         contract_addr=state_contract_obj.address,
-        abi=state_contract_obj.abi
+        abi=state_contract_obj.abi,
     )
 
     return submission_window
@@ -497,10 +487,10 @@ async def get_source_chain_epoch_size(redis_conn: aioredis.Redis, state_contract
         return source_chain_epoch_size
     else:
         # If not in cache, fetch from blockchain
-        [source_chain_epoch_size, ] = await rpc_helper.web3_call(
+        [source_chain_epoch_size] = await rpc_helper.web3_call(
             tasks=[('EPOCH_SIZE', [Web3.to_checksum_address(settings.data_market)])],
             contract_addr=state_contract_obj.address,
-            abi=state_contract_obj.abi
+            abi=state_contract_obj.abi,
         )
 
         # Cache the result in Redis
@@ -539,7 +529,7 @@ async def get_source_chain_block_time(redis_conn: aioredis.Redis, state_contract
         [source_chain_block_time] = await rpc_helper.web3_call(
             tasks=[('SOURCE_CHAIN_BLOCK_TIME', [Web3.to_checksum_address(settings.data_market)])],
             contract_addr=state_contract_obj.address,
-            abi=state_contract_obj.abi
+            abi=state_contract_obj.abi,
         )
         source_chain_block_time = int(source_chain_block_time / 1e4)
 
@@ -584,7 +574,7 @@ async def get_tail_epoch_id(
     # Calculate tail epoch_id
     tail_epoch_id = current_epoch_id - int(time_in_seconds / (source_chain_epoch_size * source_chain_block_time))
     project_first_epoch = await get_project_first_epoch(redis_conn, state_contract_obj, rpc_helper, project_id)
-    
+
     # Ensure tail_epoch_id is not less than project_first_epoch
     if tail_epoch_id < project_first_epoch:
         tail_epoch_id = project_first_epoch
@@ -669,9 +659,9 @@ async def get_project_epoch_snapshot_bulk(
 
     # Fetch snapshot data in bulk
     all_snapshot_data = await get_submission_data_bulk(
-        redis_conn, 
-        [cid for cid, _ in valid_cid_data_with_epochs], 
-        ipfs_reader, 
+        redis_conn,
+        [cid for cid, _ in valid_cid_data_with_epochs],
+        ipfs_reader,
         [project_id] * len(valid_cid_data_with_epochs),
     )
 

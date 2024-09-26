@@ -1611,7 +1611,7 @@ validators = "^0.20.0"
 type = "git"
 url = "https://git@github.com/PowerLoom/py-ipfs-client.git"
 reference = "HEAD"
-resolved_reference = "ae98cf45ddc6042009df2ced2b346be922f432ce"
+resolved_reference = "49ef8c438b9a9b208f8b4e32be6ea8faf5ecadc2"
 
 [[package]]
 name = "importlib"
