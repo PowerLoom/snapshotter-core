@@ -11,11 +11,6 @@ epoch_detector_last_processed_epoch = 'SystemEpochDetector:lastProcessedEpoch'
 # Redis key for the last processed block by the event detector
 event_detector_last_processed_block = 'SystemEventDetector:lastProcessedBlock'
 
-# Redis key for Uniswap ETH/USD price data
-uniswap_eth_usd_price_zset = (
-    'uniswap:ethBlockHeightPrice:' + settings.namespace + ':ethPriceZset'
-)
-
 # Redis keys for various RPC call counters
 rpc_json_rpc_calls = (
     'rpc:jsonRpc:' + settings.namespace + ':calls'
@@ -50,6 +45,7 @@ snapshot_submission_window_key = 'snapshotSubmissionWindow'
 # Redis key for snapshotter active status
 active_status_key = f'snapshotterActiveStatus:{settings.namespace}'
 
+
 def project_finalized_data_zset(project_id):
     """
     Generate Redis key for project finalized data zset.
@@ -62,6 +58,7 @@ def project_finalized_data_zset(project_id):
     """
     return f'projectID:{project_id}:finalizedData'
 
+
 def project_first_epoch_hmap():
     """
     Generate Redis key for project first epoch hashmap.
@@ -70,6 +67,7 @@ def project_first_epoch_hmap():
         str: Redis key for the project first epoch hashmap.
     """
     return 'projectFirstEpoch'
+
 
 def source_chain_id_key():
     """
@@ -80,6 +78,7 @@ def source_chain_id_key():
     """
     return 'sourceChainId'
 
+
 def source_chain_block_time_key():
     """
     Generate Redis key for source chain block time.
@@ -89,6 +88,7 @@ def source_chain_block_time_key():
     """
     return 'sourceChainBlockTime'
 
+
 def source_chain_epoch_size_key():
     """
     Generate Redis key for source chain epoch size.
@@ -97,6 +97,7 @@ def source_chain_epoch_size_key():
         str: Redis key for the source chain epoch size.
     """
     return 'sourceChainEpochSize'
+
 
 def project_last_finalized_epoch_key(project_id):
     """
@@ -110,6 +111,7 @@ def project_last_finalized_epoch_key(project_id):
     """
     return f'projectID:{project_id}:lastFinalizedEpoch'
 
+
 def project_successful_snapshot_submissions_suffix():
     """
     Generate Redis key suffix for successful snapshot submissions count.
@@ -118,6 +120,7 @@ def project_successful_snapshot_submissions_suffix():
         str: Redis key suffix for successful snapshot submissions count.
     """
     return 'totalSuccessfulSnapshotCount'
+
 
 def project_incorrect_snapshot_submissions_suffix():
     """
@@ -128,6 +131,7 @@ def project_incorrect_snapshot_submissions_suffix():
     """
     return 'totalIncorrectSnapshotCount'
 
+
 def project_missed_snapshot_submissions_suffix():
     """
     Generate Redis key suffix for missed snapshot submissions count.
@@ -136,6 +140,7 @@ def project_missed_snapshot_submissions_suffix():
         str: Redis key suffix for missed snapshot submissions count.
     """
     return 'totalMissedSnapshotCount'
+
 
 def project_snapshotter_status_report_key(project_id):
     """
@@ -148,6 +153,7 @@ def project_snapshotter_status_report_key(project_id):
         str: Redis key for the project's snapshotter status report.
     """
     return f'projectID:{project_id}:snapshotterStatusReport'
+
 
 def stored_projects_key():
     """

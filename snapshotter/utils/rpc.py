@@ -1,4 +1,8 @@
 import asyncio
+from functools import wraps
+from typing import List
+from typing import Union
+
 import eth_abi
 import tenacity
 from eth_abi.codec import ABICodec
@@ -12,20 +16,15 @@ from tenacity import retry
 from tenacity import retry_if_exception_type
 from tenacity import stop_after_attempt
 from tenacity import wait_random_exponential
-from web3 import AsyncHTTPProvider, AsyncWeb3
-from web3._utils.abi import map_abi_data
-from web3._utils.events import get_event_data
-from web3._utils.normalizers import BASE_RETURN_NORMALIZERS
-from web3.types import TxParams
-from web3.types import Wei
+from web3 import AsyncHTTPProvider
+from web3 import AsyncWeb3
 from web3 import Web3
-from typing import Union
-from typing import List
+from web3._utils.events import get_event_data
+
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.exceptions import RPCException
 from snapshotter.utils.models.settings_model import RPCConfigBase
-from functools import wraps
 
 
 def get_contract_abi_dict(abi):
@@ -183,7 +182,7 @@ class RpcHelper(object):
         """
         for node in self._nodes:
             node['web3_client_async'] = AsyncWeb3(
-                AsyncHTTPProvider(node['rpc_url'])
+                AsyncHTTPProvider(node['rpc_url']),
             )
             self._logger.info('Loaded async web3 provider for node {}: {}', node['rpc_url'], node['web3_client_async'])
         self._logger.info('Post async web3 provider loading: {}', self._nodes)
@@ -210,9 +209,12 @@ class RpcHelper(object):
                 # load async web3 providers
                 for node in self._nodes:
                     node['web3_client_async'] = AsyncWeb3(
-                        AsyncHTTPProvider(node['rpc_url'])
+                        AsyncHTTPProvider(node['rpc_url']),
                     )
-                    self._logger.info('Loaded async web3 provider for node {}: {}', node['rpc_url'], node['web3_client_async'])
+                    self._logger.info(
+                        'Loaded async web3 provider for node {}: {}',
+                        node['rpc_url'], node['web3_client_async'],
+                    )
                 self._logger.info('Post async web3 provider loading: {}', self._nodes)
                 self._initialized = True
                 self._logger.info('RPC client initialized')
@@ -255,7 +257,7 @@ class RpcHelper(object):
                     ),
                 )
             else:
-                self._logger.info('Loaded blank node settings for node {}', node.url)          
+                self._logger.info('Loaded blank node settings for node {}', node.url)
         self._node_count = len(self._nodes)
         self._sync_nodes_initialized = True
 
@@ -459,11 +461,11 @@ class RpcHelper(object):
                 return response
             except Exception as e:
                 exc = RPCException(
-                        request=tasks,
-                        response=None,
-                        underlying_exception=e,
-                        extra_info={'msg': str(e)},
-                    )
+                    request=tasks,
+                    response=None,
+                    underlying_exception=e,
+                    extra_info={'msg': str(e)},
+                )
                 self._logger.opt(exception=settings.logs.trace_enabled).error(
                     (
                         'Error while making web3 batch call'
@@ -544,7 +546,7 @@ class RpcHelper(object):
                         trie_node_exc = True
                     response_exceptions.append(response_data['error'])
                 else:   # if response is not a list, it is a dict
-                    return_response_data = response_data                
+                    return_response_data = response_data
 
             if response_exceptions and not trie_node_exc:
                 raise RPCException(
@@ -862,16 +864,16 @@ class RpcHelper(object):
         block = hex(block_number) if block_number is not None else 'latest'
         request_id = 1
         rpc_query.append(
-                {
-                    'jsonrpc': '2.0',
-                    'method': 'eth_getBlockByNumber',
-                    'params': [
-                        block,
-                        False,
-                    ],
-                    'id': request_id,
-                },
-            )
+            {
+                'jsonrpc': '2.0',
+                'method': 'eth_getBlockByNumber',
+                'params': [
+                    block,
+                    False,
+                ],
+                'id': request_id,
+            },
+        )
 
         response_data = await self._make_rpc_jsonrpc_call(rpc_query)
         return response_data[0]['result']

@@ -1,7 +1,6 @@
 import asyncio
 import sys
 
-from eth_utils.address import to_checksum_address
 from web3 import Web3
 
 from snapshotter.auth.helpers.redis_conn import RedisPoolCache
@@ -24,7 +23,6 @@ async def main():
 
     # Initialize RPC helper for anchor chain
     anchor_rpc = RpcHelper(settings.anchor_chain_rpc)
-    print('Anchor rpc settings: ', settings.anchor_chain_rpc)
     await anchor_rpc.init(redis_conn=redis_conn)
 
     # Load protocol state ABI
@@ -36,7 +34,7 @@ async def main():
     snapshotters_arr_query = await anchor_rpc.web3_call(
         tasks=[('allSnapshotters', [Web3.to_checksum_address(settings.instance_id)])],  # tuple of method name and args
         contract_addr=settings.protocol_state.address,
-        abi=protocol_abi
+        abi=protocol_abi,
     )
     allowed_snapshotters = snapshotters_arr_query[0]
 
@@ -50,7 +48,7 @@ async def main():
     slot_id_mapping_query = await anchor_rpc.web3_call(
         tasks=[('slotSnapshotterMapping', [settings.slot_id])],
         contract_addr=settings.protocol_state.address,
-        abi=protocol_abi
+        abi=protocol_abi,
     )
 
     try:

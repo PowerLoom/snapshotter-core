@@ -21,7 +21,6 @@ from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMess
 from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 from snapshotter.utils.redis.redis_keys import last_snapshot_processing_complete_timestamp_key
-from snapshotter.utils.redis.redis_keys import snapshot_submission_window_key
 from snapshotter.utils.redis.redis_keys import submitted_base_snapshots_key
 
 
@@ -190,14 +189,16 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             await p.execute()
 
             # Commit payload asynchronously
-            asyncio.ensure_future(self._commit_payload(
-                task_type=task_type,
-                _ipfs_writer_client=self._ipfs_writer_client,
-                project_id=project_id,
-                epoch=msg_obj,
-                snapshot=snapshot,
-                storage_flag=settings.web3storage.upload_snapshots,
-            ))
+            asyncio.ensure_future(
+                self._commit_payload(
+                    task_type=task_type,
+                    _ipfs_writer_client=self._ipfs_writer_client,
+                    project_id=project_id,
+                    epoch=msg_obj,
+                    snapshot=snapshot,
+                    storage_flag=settings.web3storage.upload_snapshots,
+                ),
+            )
 
     async def _process_bulk_mode(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
@@ -317,14 +318,16 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 await p.execute()
 
                 # Commit payload asynchronously
-                asyncio.ensure_future(self._commit_payload(
-                    task_type=task_type,
-                    _ipfs_writer_client=self._ipfs_writer_client,
-                    project_id=project_id,
-                    epoch=msg_obj,
-                    snapshot=snapshot,
-                    storage_flag=settings.web3storage.upload_snapshots,
-                ))
+                asyncio.ensure_future(
+                    self._commit_payload(
+                        task_type=task_type,
+                        _ipfs_writer_client=self._ipfs_writer_client,
+                        project_id=project_id,
+                        epoch=msg_obj,
+                        snapshot=snapshot,
+                        storage_flag=settings.web3storage.upload_snapshots,
+                    ),
+                )
 
     async def _processor_task(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """

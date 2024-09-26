@@ -38,8 +38,6 @@ from snapshotter.utils.models.data_models import SnapshotterPing
 from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.message_models import ProcessHubCommand
 from snapshotter.utils.rabbitmq_helpers import RabbitmqSelectLoopInteractor
-from snapshotter.utils.redis.redis_conn import provide_async_redis_conn
-from snapshotter.utils.redis.redis_conn import provide_redis_conn
 from snapshotter.utils.redis.redis_conn import provide_redis_conn_repsawning_thread
 from snapshotter.utils.redis.redis_conn import REDIS_CONN_CONF
 from snapshotter.utils.redis.redis_keys import process_hub_core_start_timestamp
@@ -316,9 +314,18 @@ class ProcessHubCore(Process):
         self._logger.debug('=' * 80)
         self._logger.debug('Launching Workers')
 
-        self._launch_workers('snapshot_workers', SnapshotAsyncWorker, settings.callback_worker_config.num_snapshot_workers)
-        self._launch_workers('aggregation_workers', AggregationAsyncWorker, settings.callback_worker_config.num_aggregation_workers)
-        self._launch_workers('delegate_workers', DelegateAsyncWorker, settings.callback_worker_config.num_delegate_workers)
+        self._launch_workers(
+            'snapshot_workers', SnapshotAsyncWorker,
+            settings.callback_worker_config.num_snapshot_workers,
+        )
+        self._launch_workers(
+            'aggregation_workers', AggregationAsyncWorker,
+            settings.callback_worker_config.num_aggregation_workers,
+        )
+        self._launch_workers(
+            'delegate_workers', DelegateAsyncWorker,
+            settings.callback_worker_config.num_delegate_workers,
+        )
 
     def _launch_workers(self, worker_type, worker_class, num_workers):
         """
@@ -475,7 +482,7 @@ class ProcessHubCore(Process):
         """
         try:
             source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME(
-                Web3.to_checksum_address(settings.data_market)
+                Web3.to_checksum_address(settings.data_market),
             ).call()
             self._source_chain_block_time = source_block_time / 10 ** 4
             self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
@@ -488,7 +495,7 @@ class ProcessHubCore(Process):
         """
         try:
             self._epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE(
-                Web3.to_checksum_address(settings.data_market)
+                Web3.to_checksum_address(settings.data_market),
             ).call()
         except Exception as e:
             self._logger.exception('Exception in querying protocol state for epoch size: {}', e)

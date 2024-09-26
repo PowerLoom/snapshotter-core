@@ -1,5 +1,4 @@
 import asyncio
-import random
 import sys
 from functools import wraps
 
@@ -187,20 +186,27 @@ def aiorwlock_aqcuire_release(fn):
         self._logger.info('Using signer {} for submission task. Acquiring lock', self._signer.address)
         await self._signer.nonce_lock.writer_lock.acquire()
         kwargs.update(signer_in_use=self._signer)
-        self._logger.info('Using signer {} for submission task. Acquired lock with signer filled in kwargs', self._signer.address)
-        
+        self._logger.info(
+            'Using signer {} for submission task. Acquired lock with signer filled in kwargs', self._signer.address,
+        )
+
         try:
             # Execute the wrapped function
             tx_hash = await fn(self, *args, **kwargs)  # including the retry calls
             self._signer.nonce += 1
-            self._logger.info('Using signer {} for submission task. Incremented nonce {}', self._signer.address, self._signer.nonce)
-            
+            self._logger.info(
+                'Using signer {} for submission task. Incremented nonce {}',
+                self._signer.address, self._signer.nonce,
+            )
+
             # Release the lock
             try:
                 self._signer.nonce_lock.writer_lock.release()
             except Exception as e:
-                logger.error('Error releasing rwlock: {}. But moving on regardless... | Context: '
-                             'Using signer {} for submission task. Acquiring lock', e, self._signer.address)
+                logger.error(
+                    'Error releasing rwlock: {}. But moving on regardless... | Context: '
+                    'Using signer {} for submission task. Acquiring lock', e, self._signer.address,
+                )
         except Exception as e:
             # This exception is ultimately reraised by tenacity once the retries are exhausted
             pass
@@ -223,6 +229,6 @@ def aiorwlock_aqcuire_release(fn):
                     self._logger.error(
                         'tx_hash: {} failed to gather receipt after 120 seconds, error: {} | '
                         'Context: Using signer {} for submission task',
-                        tx_hash, e, self._signer.address
+                        tx_hash, e, self._signer.address,
                     )
     return wrapper

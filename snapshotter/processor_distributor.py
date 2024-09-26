@@ -1,13 +1,11 @@
 import asyncio
 import importlib
-import json
 import multiprocessing
 import queue
 import resource
 import sys
 import time
 from collections import defaultdict
-from datetime import datetime
 from functools import partial
 from signal import SIGINT
 from signal import signal
@@ -39,21 +37,15 @@ from snapshotter.settings.config import projects_config
 from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
-from snapshotter.utils.callback_helpers import send_failure_notifications_async
-from snapshotter.utils.data_utils import get_projects_list
 from snapshotter.utils.data_utils import get_snapshot_submision_window
 from snapshotter.utils.data_utils import get_source_chain_epoch_size
 from snapshotter.utils.data_utils import get_source_chain_id
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.file_utils import read_json_file
-from snapshotter.utils.models.data_models import PowerloomSnapshotSignMessage, SigningWorkProjectsSnapshottedStateItem, SigningWorkSlotSelectionStateItem, SigningWorkStates, SnapshotterEpochProcessingReportItem
-from snapshotter.utils.models.data_models import SnapshotterIssue
-from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
 from snapshotter.utils.models.data_models import SnapshotterStateUpdate
 from snapshotter.utils.models.data_models import SnapshottersUpdatedEvent
 from snapshotter.utils.models.message_models import EpochBase
-from snapshotter.utils.models.message_models import PayloadCommitFinalizedMessage
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomProjectsUpdatedMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotFinalizedMessage
@@ -65,27 +57,23 @@ from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import active_status_key
 from snapshotter.utils.redis.redis_keys import epoch_id_epoch_released_key
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
-from snapshotter.utils.redis.redis_keys import last_epoch_detected_timestamp_key
-from snapshotter.utils.redis.redis_keys import last_snapshot_processing_complete_timestamp_key
 from snapshotter.utils.redis.redis_keys import process_hub_core_start_timestamp
 from snapshotter.utils.redis.redis_keys import project_finalized_data_zset
 from snapshotter.utils.redis.redis_keys import project_last_finalized_epoch_key
-from snapshotter.utils.redis.redis_keys import snapshot_submission_window_key
 from snapshotter.utils.rpc import RpcHelper
-# from snapshotter.utils.data_utils import build_projects_list_from_events
 
 
 class ProcessorDistributor(multiprocessing.Process):
     """
     A class responsible for distributing processing tasks and managing the snapshot lifecycle.
-    
+
     This class handles epoch releases, project updates, snapshot submissions, and aggregations.
     It interacts with RabbitMQ for message passing and Redis for state management.
     """
 
     _aioredis_pool: RedisPoolCache
     _redis_conn: aioredis.Redis
-    _rpc_helper: RpcHelper 
+    _rpc_helper: RpcHelper
     _anchor_rpc_helper: RpcHelper
     _async_transport: AsyncHTTPTransport
     _client: AsyncClient
@@ -282,7 +270,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     'Imported preloader class {} against preloader module {} for task type {}',
                     preloader_class,
                     preloader_module,
-                    preloader.task_type
+                    preloader.task_type,
                 )
 
     async def _init_protocol_meta(self):
@@ -297,7 +285,9 @@ class ProcessorDistributor(multiprocessing.Process):
             abi=protocol_abi,
         )
         try:
-            source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME(Web3.to_checksum_address(settings.data_market)).call()
+            source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME(
+                Web3.to_checksum_address(settings.data_market),
+            ).call()
         except Exception as e:
             self._logger.exception(
                 'Exception in querying protocol state for source chain block time: {}',
@@ -309,7 +299,9 @@ class ProcessorDistributor(multiprocessing.Process):
             self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
 
         try:
-            epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE(Web3.to_checksum_address(settings.data_market)).call()
+            epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE(
+                Web3.to_checksum_address(settings.data_market),
+            ).call()
         except Exception as e:
             self._logger.exception(
                 'Exception in querying protocol state for epoch size: {}',
@@ -322,19 +314,19 @@ class ProcessorDistributor(multiprocessing.Process):
         self._epochs_in_a_day = 86400 // (self._epoch_size * self._source_chain_block_time)
         self._logger.debug('Set epochs in a day to {}', self._epochs_in_a_day)
         self._source_chain_epoch_size = await get_source_chain_epoch_size(
-            redis_conn=self._redis_conn, 
+            redis_conn=self._redis_conn,
             state_contract_obj=self._protocol_state_contract,
-            rpc_helper=self._anchor_rpc_helper
+            rpc_helper=self._anchor_rpc_helper,
         )
         self._source_chain_id = await get_source_chain_id(
             redis_conn=self._redis_conn,
             rpc_helper=self._anchor_rpc_helper,
-            state_contract_obj=self._protocol_state_contract
+            state_contract_obj=self._protocol_state_contract,
         )
         self._submission_window = await get_snapshot_submision_window(
             redis_conn=self._redis_conn,
             rpc_helper=self._anchor_rpc_helper,
-            state_contract_obj=self._protocol_state_contract
+            state_contract_obj=self._protocol_state_contract,
         )
 
     async def init_worker(self):
@@ -391,7 +383,7 @@ class ProcessorDistributor(multiprocessing.Process):
         self._logger.debug(
             'Waiting for preload conditions against epoch {}: {}',
             epoch.epochId,
-            conditions
+            conditions,
         )
         preload_results = await asyncio.gather(
             *conditions,
@@ -509,7 +501,7 @@ class ProcessorDistributor(multiprocessing.Process):
                         project_type, msg_obj,
                     ),
                 )
-                continue 
+                continue
 
         asyncio.ensure_future(
             self._preloader_waiter(
@@ -738,7 +730,7 @@ class ProcessorDistributor(multiprocessing.Process):
         await self._redis_conn.set(
             name=project_last_finalized_epoch_key(msg_obj.projectId),
             value=msg_obj.epochId,
-            ex=60.0
+            ex=60.0,
         )
 
         # Add to project finalized data zset
@@ -757,8 +749,6 @@ class ProcessorDistributor(multiprocessing.Process):
         )
 
         self._logger.trace(f'Payload Commit Message Distribution time - {int(time.time())}')
-
-        
 
     async def _distribute_callbacks_aggregate(self, message: IncomingMessage):
         """
@@ -847,7 +837,9 @@ class ProcessorDistributor(multiprocessing.Process):
                             finalized_messages.append(event)
 
                     if event_project_ids == set(config.projects_to_wait_for):
-                        self._logger.info(f'All project snapshots accumulated for epoch {process_unit.epochId} against multi aggregate project type {config.project_type}, aggregating')
+                        self._logger.info(
+                            f'All project snapshots accumulated for epoch {process_unit.epochId} against multi aggregate project type {config.project_type}, aggregating',
+                        )
                         final_msg = PowerloomCalculateAggregateMessage(
                             messages=sorted(finalized_messages, key=lambda x: x.projectId),
                             epochId=process_unit.epochId,
@@ -1002,11 +994,10 @@ class ProcessorDistributor(multiprocessing.Process):
         self._anchor_rpc_helper = RpcHelper(
             rpc_settings=settings.anchor_chain_rpc,
         )
-        
+
         self._slots_per_day = 12
         self._logger.debug('Set slots per day to {}', self._slots_per_day)
-        
-        
+
         ev_loop = asyncio.get_event_loop()
         ev_loop.run_until_complete(self._anchor_rpc_helper.init())
         ev_loop.run_until_complete(self.init_worker())
@@ -1019,4 +1010,3 @@ class ProcessorDistributor(multiprocessing.Process):
             ev_loop.run_forever()
         finally:
             ev_loop.close()
-

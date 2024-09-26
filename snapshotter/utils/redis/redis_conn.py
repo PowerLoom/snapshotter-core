@@ -1,7 +1,6 @@
 import contextlib
 from datetime import datetime
 from functools import wraps
-from pydoc import cli
 
 import redis
 import redis.exceptions as redis_exc
@@ -11,7 +10,6 @@ from redis.asyncio.connection import ConnectionPool
 
 from snapshotter.settings.config import settings
 from snapshotter.settings.config import settings as settings_conf
-from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.callback_helpers import send_failure_notifications_sync
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.models.data_models import SnapshotterIssue

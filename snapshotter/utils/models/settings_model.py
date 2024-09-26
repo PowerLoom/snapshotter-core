@@ -197,7 +197,7 @@ class HTTPXConfig(BaseModel):
 class Settings(BaseModel):
     """Main settings configuration model."""
     namespace: str
-    signer_private_key: str  
+    signer_private_key: str
     core_api: CoreAPI
     instance_id: str
     slot_id: int
@@ -213,7 +213,6 @@ class Settings(BaseModel):
     data_market: str
     projects_config_path: str
     preloader_config_path: str
-    pair_contract_abi: str
     aggregator_config_path: str
     protocol_state: EventContract
     callback_worker_config: CallbackWorkerConfig

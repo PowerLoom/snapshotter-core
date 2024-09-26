@@ -12,17 +12,20 @@ from signal import SIGINT
 from signal import SIGQUIT
 from signal import SIGTERM
 from typing import Union
+
 from redis import asyncio as aioredis
 from web3 import Web3
+
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.exceptions import GenericExitOnSignal
 from snapshotter.utils.file_utils import read_json_file
-from snapshotter.utils.models.data_models import EpochReleasedEvent, SnapshotBatchFinalizedEvent, SnapshotterIssue, SnapshotterReportState
-from snapshotter.utils.models.data_models import EventBase
+from snapshotter.utils.models.data_models import EpochReleasedEvent
+from snapshotter.utils.models.data_models import SnapshotBatchFinalizedEvent
 from snapshotter.utils.rabbitmq_helpers import RabbitmqThreadedSelectLoopInteractor
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
-from snapshotter.utils.redis.redis_keys import event_detector_last_processed_block, last_epoch_detected_epoch_id_key
+from snapshotter.utils.redis.redis_keys import event_detector_last_processed_block
+from snapshotter.utils.redis.redis_keys import last_epoch_detected_epoch_id_key
 from snapshotter.utils.redis.redis_keys import last_epoch_detected_timestamp_key
 from snapshotter.utils.rpc import get_event_sig_and_abi
 from snapshotter.utils.rpc import RpcHelper
@@ -120,7 +123,7 @@ class EventDetectorProcess(multiprocessing.Process):
             self._logger,
         )
         self.contract_address = settings.protocol_state.address
-        
+
         self._last_reporting_service_ping = 0
         self._last_reporting_message_sent = 0
         self._simulation_completed = False
@@ -138,7 +141,9 @@ class EventDetectorProcess(multiprocessing.Process):
         Initializes the EventDetectorProcess by waiting for local collector initialization,
         broadcasting simulation submission, and waiting for simulation completion.
         """
-        self._logger.info('Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 15 seconds...')
+        self._logger.info(
+            'Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 15 seconds...',
+        )
         await asyncio.sleep(15)
         await self._broadcast_simulation_submission()
         # sleep until simulation is completed
@@ -150,10 +155,10 @@ class EventDetectorProcess(multiprocessing.Process):
             self._logger.error('Error while waiting for simulation completion: {}', e)
         finally:
             self._logger.info('Breaking out of simulation completion wait loop...')
-        # TODO: move simulation completion check to a separate cache entry or check on a contract entry 
+        # TODO: move simulation completion check to a separate cache entry or check on a contract entry
         # poll for simulation completion
         self._simulation_completed = True
-    
+
     async def _broadcast_simulation_submission(self):
         """
         Prepares and broadcasts the simulation submission event.
@@ -171,7 +176,7 @@ class EventDetectorProcess(multiprocessing.Process):
         self._logger.info(
             'Broadcasting simulation submission: {}', event,
         )
-        self._broadcast_event("EpochReleased", event)
+        self._broadcast_event('EpochReleased', event)
 
     async def _init_redis_pool(self):
         """
@@ -216,7 +221,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 new_epoch_detected = True
                 latest_epoch_id = max(latest_epoch_id, log.args.epochId)
                 events.append((log.event, event))
-            
+
             elif log.event == 'SnapshotBatchFinalized':
                 event = SnapshotBatchFinalizedEvent(
                     epochId=log.args.epochId,
@@ -279,7 +284,9 @@ class EventDetectorProcess(multiprocessing.Process):
             event (EventBase): The event being broadcasted.
         """
         if not self._simulation_completed and event.epochId != 0:
-            self._logger.debug('Skipping event broadcast to RabbitMQ for epoch {} as simulation is not complete. Incoming event: {}', event.epochId, event)
+            self._logger.debug(
+                'Skipping event broadcast to RabbitMQ for epoch {} as simulation is not complete. Incoming event: {}', event.epochId, event,
+            )
             return
         self._logger.info('Broadcasting event: {}', event)
         brodcast_msg = (
@@ -403,7 +410,7 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
         await self._source_rpc_helper.init(redis_conn=self._redis_conn)
-    
+
     @rabbitmq_and_redis_cleanup
     def run(self):
         """
@@ -415,31 +422,31 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         # Initialize the event loop
         self.ev_loop = asyncio.get_event_loop()
-        
+
         # Initialize the Redis pool
         self.ev_loop.run_until_complete(self._init_redis_pool())
-        
+
         # Set resource limits
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,
             (settings.rlimit.file_descriptors, hard),
         )
-        
+
         # Set up signal handlers
         for signame in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signame, self._generic_exit_handler)
-        
+
         # Start the RabbitMQ thread
         self._rabbitmq_thread = threading.Thread(
             target=self._interactor_wrapper,
             kwargs={'q': self._rabbitmq_queue},
         )
         self._rabbitmq_thread.start()
-        
+
         # Initialize RPC connections
         self.ev_loop.run_until_complete(self._init_rpc())
-        
+
         # Initialize the event detector
         self.ev_loop.run_until_complete(self.init())
 
@@ -447,7 +454,7 @@ class EventDetectorProcess(multiprocessing.Process):
         if not self._simulation_completed:
             self._logger.info('Simulation not completed after polling period. Exiting...')
             sys.exit(1)
-        
+
         # Set up the contract and event ABIs
         self.contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
             address=Web3.to_checksum_address(self.contract_address),
