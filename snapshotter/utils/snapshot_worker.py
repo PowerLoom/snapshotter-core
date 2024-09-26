@@ -195,7 +195,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 ),
             )
             self._active_tasks.add(task)
-            task.add_done_callback(self._active_tasks.discard)
+            task.add_done_callback(lambda _: self._active_tasks.discard(task))
 
     async def _process_bulk_mode(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
@@ -324,7 +324,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     ),
                 )
                 self._active_tasks.add(task)
-                task.add_done_callback(self._active_tasks.discard)
+                task.add_done_callback(lambda _: self._active_tasks.discard(task))
 
     async def _process_task(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
@@ -411,7 +411,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
         # Start the processor task
         task = asyncio.create_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
         self._active_tasks.add(task)
-        task.add_done_callback(self._active_tasks.discard)
+        task.add_done_callback(lambda _: self._active_tasks.discard(task))
 
     async def _init_project_calculation_mapping(self):
         """
