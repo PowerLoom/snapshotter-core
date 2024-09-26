@@ -7,7 +7,6 @@ services:
     ports:
       - ${LOCAL_COLLECTOR_PORT:-50051}:${LOCAL_COLLECTOR_PORT:-50051}
     volumes:
-      - ./shared-volume:/keys
       - ./logs/local-collector:/root/.pm2/logs
     environment:
       - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
