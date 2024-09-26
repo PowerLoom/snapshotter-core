@@ -1,5 +1,6 @@
 #!/bin/bash
 
+
 poetry run python -m snapshotter.snapshotter_id_ping
 ret_status=$?
 

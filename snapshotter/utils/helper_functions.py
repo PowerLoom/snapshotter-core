@@ -1,5 +1,4 @@
 import asyncio
-import random
 import sys
 from functools import wraps
 
@@ -9,7 +8,7 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
 from snapshotter.utils.models.message_models import EpochBase
 
-# setup logging
+# Setup logging
 logger = logger.bind(module='Powerloom|HelperFunctions')
 
 
@@ -34,22 +33,13 @@ def cleanup_proc_hub_children(fn):
                 'Received an exception on process hub core run(): {}',
                 e,
             )
-            # logger.error('Initiating kill children....')
-            # # silently kill all children
-            # procs = psutil.Process().children()
-            # for p in procs:
-            #     p.terminate()
-            # gone, alive = psutil.wait_procs(procs, timeout=3)
-            # for p in alive:
-            #     logger.error(f'killing process: {p.name()}')
-            #     p.kill()
+            # Kill all child processes
             self._kill_all_children()
             logger.error('Finished waiting for all children...now can exit.')
         finally:
             logger.error('Finished waiting for all children...now can exit.')
             self._reporter_thread.join()
             sys.exit(0)
-            # sys.exit(0)
     return wrapper
 
 
@@ -182,11 +172,11 @@ def _parse_value(val):
 
 def aiorwlock_aqcuire_release(fn):
     """
-    A decorator that wraps a function and handles cleanup of any child processes
-    spawned by the function in case of an exception.
+    A decorator that wraps a function with asynchronous read-write lock acquisition and release.
+    It also handles nonce incrementation and transaction receipt checking.
 
     Args:
-        fn (function): The function to be wrapped.
+        fn (function): The asynchronous function to be wrapped.
 
     Returns:
         function: The wrapped function.
@@ -196,24 +186,34 @@ def aiorwlock_aqcuire_release(fn):
         self._logger.info('Using signer {} for submission task. Acquiring lock', self._signer.address)
         await self._signer.nonce_lock.writer_lock.acquire()
         kwargs.update(signer_in_use=self._signer)
-        self._logger.info('Using signer {} for submission task. Acquired lock with signer filled in kwargs', self._signer.address)
-        # self._logger.debug('Wrapping fn: {}', fn.__name__)
+        self._logger.info(
+            'Using signer {} for submission task. Acquired lock with signer filled in kwargs', self._signer.address,
+        )
+
         try:
+            # Execute the wrapped function
             tx_hash = await fn(self, *args, **kwargs)  # including the retry calls
             self._signer.nonce += 1
-            self._logger.info('Using signer {} for submission task. Incremented nonce {}', self._signer.address, self._signer.nonce)
+            self._logger.info(
+                'Using signer {} for submission task. Incremented nonce {}',
+                self._signer.address, self._signer.nonce,
+            )
+
+            # Release the lock
             try:
                 self._signer.nonce_lock.writer_lock.release()
             except Exception as e:
-                logger.error('Error releasing rwlock: {}. But moving on regardless... | Context: '
-                             'Using signer {} for submission task. Acquiring lock', e, self._signer.address)
+                logger.error(
+                    'Error releasing rwlock: {}. But moving on regardless... | Context: '
+                    'Using signer {} for submission task. Acquiring lock', e, self._signer.address,
+                )
         except Exception as e:
-            # this is ultimately reraised by tenacity once the retries are exhausted
-            # nothing to do here
+            # This exception is ultimately reraised by tenacity once the retries are exhausted
             pass
         else:
             if tx_hash is not None:
                 try:
+                    # Wait for transaction receipt
                     receipt = await self._w3.eth.wait_for_transaction_receipt(tx_hash, timeout=15)
                     if receipt['status'] == 0:
                         self._logger.info(
@@ -229,12 +229,6 @@ def aiorwlock_aqcuire_release(fn):
                     self._logger.error(
                         'tx_hash: {} failed to gather receipt after 120 seconds, error: {} | '
                         'Context: Using signer {} for submission task',
-                        tx_hash, e, self._signer.address
+                        tx_hash, e, self._signer.address,
                     )
-        # finally:
-        #     try:
-        #         self._signer.nonce_lock.writer_lock.release()
-        #     except Exception as e:
-        #         logger.error('Error releasing rwlock: {}. But moving on regardless... | Context: '
-        #                      'Using signer {} for submission task: {}. Acquiring lock', e, self._signer.address, kwargs)
     return wrapper

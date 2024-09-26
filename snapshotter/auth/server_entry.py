@@ -18,10 +18,10 @@ from snapshotter.auth.helpers.redis_keys import user_revoked_api_keys_set
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import logger
 
-# setup logging
+# Setup logging
 api_logger = logger.bind(module=__name__)
 
-# setup CORS origins stuff
+# Setup CORS origins
 origins = ['*']
 app = FastAPI()
 app.add_middleware(
@@ -35,6 +35,9 @@ app.add_middleware(
 
 @app.on_event('startup')
 async def startup_boilerplate():
+    """
+    Initialize the Redis connection pool and core settings on application startup.
+    """
     app.state.aioredis_pool = RedisPoolCache(pool_size=100)
     await app.state.aioredis_pool.populate()
     app.state.redis_pool = app.state.aioredis_pool._aioredis_pool
@@ -48,19 +51,32 @@ async def create_update_user(
     response: Response,
 ):
     """
-    can be used for both creating a new entity or updating an entity's information in the redis htable
+    Create a new user or update an existing user's information in the Redis hash table.
+
+    Args:
+        request (Request): The FastAPI request object.
+        user_cu_request (AppOwnerModel): The user data to be created or updated.
+        response (Response): The FastAPI response object.
+
+    Returns:
+        dict: A dictionary indicating the success status of the operation.
     """
     redis_conn: aioredis.Redis = request.app.state.redis_pool
     try:
+        # Add user email to the set of all users
         await redis_conn.sadd(
             all_users_set(),
             user_cu_request.email,
         )
+        
+        # If the user is new, set the next reset time
         if not await redis_conn.sismember(
             all_users_set(),
             user_cu_request.email,
         ):
             user_cu_request.next_reset_at = int(time.time()) + 86400
+        
+        # Store user details in the hash table
         user_details = user_cu_request.dict()
         await redis_conn.hset(
             name=user_details_htable(user_cu_request.email),
@@ -80,11 +96,24 @@ async def add_api_key(
     request: Request,
     response: Response,
 ):
+    """
+    Add a new API key for a user.
+
+    Args:
+        api_key_request (AddApiKeyRequest): The API key to be added.
+        email (str): The email of the user.
+        request (Request): The FastAPI request object.
+        response (Response): The FastAPI response object.
+
+    Returns:
+        dict: A dictionary indicating the success status of the operation and any error messages.
+    """
     redis_conn: aioredis.Redis = request.app.state.redis_pool
     if not await redis_conn.sismember(all_users_set(), email):
-        return {'success': False, 'error': 'User does not exists'}
+        return {'success': False, 'error': 'User does not exist'}
 
     async with redis_conn.pipeline(transaction=True) as p:
+        # Add the API key to the user's active keys set and map it to the user's email
         await p.sadd(
             user_active_api_keys_set(email),
             api_key_request.api_key,
@@ -99,9 +128,21 @@ async def revoke_api_key(
     request: Request,
     response: Response,
 ):
+    """
+    Revoke an API key for a user.
+
+    Args:
+        api_key_request (AddApiKeyRequest): The API key to be revoked.
+        email (str): The email of the user.
+        request (Request): The FastAPI request object.
+        response (Response): The FastAPI response object.
+
+    Returns:
+        dict: A dictionary indicating the success status of the operation and any error messages.
+    """
     redis_conn: aioredis.Redis = request.app.state.redis_pool
     if not await redis_conn.sismember(all_users_set(), email):
-        return {'success': False, 'error': 'User does not exists'}
+        return {'success': False, 'error': 'User does not exist'}
 
     if not await redis_conn.sismember(
         user_active_api_keys_set(email),
@@ -113,6 +154,8 @@ async def revoke_api_key(
         api_key_request.api_key,
     ):
         return {'success': False, 'error': 'API key already revoked'}
+    
+    # Move the API key from active to revoked set
     await redis_conn.smove(
         user_active_api_keys_set(email),
         user_revoked_api_keys_set(email),
@@ -127,11 +170,22 @@ async def get_user_details(
     response: Response,
     email: str,
 ):
+    """
+    Retrieve all details for a specific user.
+
+    Args:
+        request (Request): The FastAPI request object.
+        response (Response): The FastAPI response object.
+        email (str): The email of the user.
+
+    Returns:
+        dict: A dictionary containing the user's details, including active and revoked API keys.
+    """
     redis_conn: aioredis.Redis = request.app.state.redis_pool
 
     all_details = await redis_conn.hgetall(name=user_details_htable(email))
     if not all_details:
-        return {'success': False, 'error': 'User does not exists'}
+        return {'success': False, 'error': 'User does not exist'}
 
     active_api_keys = await redis_conn.smembers(
         name=user_active_api_keys_set(email),
@@ -155,6 +209,16 @@ async def get_all_users(
     request: Request,
     response: Response,
 ):
+    """
+    Retrieve a list of all users.
+
+    Args:
+        request (Request): The FastAPI request object.
+        response (Response): The FastAPI response object.
+
+    Returns:
+        dict: A dictionary containing a list of all user emails.
+    """
     redis_conn: aioredis.Redis = request.app.state.redis_pool
     all_users = await redis_conn.smembers(all_users_set())
     return {

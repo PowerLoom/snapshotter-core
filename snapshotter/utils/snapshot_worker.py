@@ -21,22 +21,28 @@ from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMess
 from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 from snapshotter.utils.redis.redis_keys import last_snapshot_processing_complete_timestamp_key
-from snapshotter.utils.redis.redis_keys import snapshot_submission_window_key
 from snapshotter.utils.redis.redis_keys import submitted_base_snapshots_key
 
 
 class SnapshotAsyncWorker(GenericAsyncWorker):
+    """
+    A worker class for asynchronous snapshot processing.
+
+    This class extends GenericAsyncWorker and provides functionality for processing
+    snapshot tasks asynchronously, including IPFS operations and project-specific calculations.
+    """
+
     _ipfs_singleton: AsyncIPFSClientSingleton
     _ipfs_writer_client: AsyncIPFSClient
     _ipfs_reader_client: AsyncIPFSClient
 
     def __init__(self, name, **kwargs):
         """
-        Initializes a SnapshotAsyncWorker object.
+        Initialize a SnapshotAsyncWorker instance.
 
         Args:
             name (str): The name of the worker.
-            **kwargs: Additional keyword arguments to be passed to the AsyncWorker constructor.
+            **kwargs: Additional keyword arguments to be passed to the GenericAsyncWorker constructor.
         """
         self._q = f'powerloom-backend-cb-snapshot:{settings.namespace}:{settings.instance_id}'
         self._rmq_routing = f'powerloom-backend-callback:{settings.namespace}:{settings.instance_id}:EpochReleased.*'
@@ -49,12 +55,12 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
     def _gen_project_id(self, task_type: str, data_source: Optional[str] = None, primary_data_source: Optional[str] = None):
         """
-        Generates a project ID based on the given task type, data source, and primary data source.
+        Generate a project ID based on the given parameters.
 
         Args:
             task_type (str): The type of task.
-            data_source (Optional[str], optional): The data source. Defaults to None.
-            primary_data_source (Optional[str], optional): The primary data source. Defaults to None.
+            data_source (Optional[str]): The data source. Defaults to None.
+            primary_data_source (Optional[str]): The primary data source. Defaults to None.
 
         Returns:
             str: The generated project ID.
@@ -71,17 +77,16 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
     async def _process_single_mode(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
-        Processes a single mode snapshot task for a given message object and task type.
+        Process a single mode snapshot task.
+
+        This method handles the computation, transformation, and storage of a single snapshot.
 
         Args:
-            msg_obj (PowerloomSnapshotProcessMessage): The message object containing the snapshot task details.
+            msg_obj (PowerloomSnapshotProcessMessage): The message object containing snapshot task details.
             task_type (str): The type of task to be performed.
 
         Raises:
             Exception: If an error occurs while processing the snapshot task.
-
-        Returns:
-            None
         """
         project_id = self._gen_project_id(
             task_type=task_type,
@@ -90,8 +95,10 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
         )
 
         try:
+            # Get the task processor for the given task type
             task_processor = self._project_calculation_mapping[task_type]
 
+            # Compute the snapshot
             snapshot = await task_processor.compute(
                 epoch=msg_obj,
                 redis_conn=self._redis_conn,
@@ -103,16 +110,14 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     'No snapshot data for: {}, skipping...', msg_obj,
                 )
 
-            if task_processor.transformation_lambdas and snapshot:
-                for each_lambda in task_processor.transformation_lambdas:
-                    snapshot = each_lambda(snapshot, msg_obj.data_source, msg_obj.begin, msg_obj.end)
-
         except Exception as e:
+            # Handle exceptions during snapshot processing
             self._logger.opt(exception=settings.logs.trace_enabled).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
             )
 
+            # Prepare and send failure notification
             notification_message = SnapshotterIssue(
                 instanceID=settings.instance_id,
                 issueType=SnapshotterReportState.MISSED_SNAPSHOT.value,
@@ -125,6 +130,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             await send_failure_notifications_async(
                 client=self._client, message=notification_message,
             )
+
+            # Update Redis with failure state
             await self._redis_conn.hset(
                 name=epoch_id_project_to_state_mapping(
                     epoch_id=msg_obj.epochId, state_id=SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -136,15 +143,20 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 },
             )
         else:
+            # Handle successful snapshot processing
             p = self._redis_conn.pipeline()
+
+            # Store the snapshot in Redis
             p.set(
                 name=submitted_base_snapshots_key(
                     epoch_id=msg_obj.epochId, project_id=project_id,
                 ),
                 value=snapshot.json(),
-                # block time is about 2 seconds on anchor chain, keeping it around ten times the submission window
+                # Set expiration time (10 times the submission window * 2 seconds)
                 ex=self._submission_window * 10 * 2,
             )
+
+            # Update Redis with success state
             p.hset(
                 name=epoch_id_project_to_state_mapping(
                     epoch_id=msg_obj.epochId, state_id=SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -156,6 +168,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 },
             )
 
+            # Update last snapshot processing timestamp
             await self._redis_conn.set(
                 name=last_snapshot_processing_complete_timestamp_key(),
                 value=int(time.time()),
@@ -167,33 +180,42 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 )
                 return
 
+            # Execute Redis pipeline
             await p.execute()
-            asyncio.ensure_future(self._commit_payload(
-                task_type=task_type,
-                _ipfs_writer_client=self._ipfs_writer_client,
-                project_id=project_id,
-                epoch=msg_obj,
-                snapshot=snapshot,
-                storage_flag=settings.web3storage.upload_snapshots,
-            ))
+
+            # Commit payload asynchronously
+            current_time = time.time()
+            task = asyncio.create_task(
+                self._commit_payload(
+                    task_type=task_type,
+                    _ipfs_writer_client=self._ipfs_writer_client,
+                    project_id=project_id,
+                    epoch=msg_obj,
+                    snapshot=snapshot,
+                    storage_flag=settings.web3storage.upload_snapshots,
+                ),
+            )
+            self._active_tasks.add((current_time, task))
+            task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def _process_bulk_mode(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
-        Processes the given PowerloomSnapshotProcessMessage object in bulk mode.
+        Process snapshots in bulk mode.
+
+        This method handles the computation and storage of multiple snapshots at once.
 
         Args:
-            msg_obj (PowerloomSnapshotProcessMessage): The message object to process.
-            task_type (str): The type of task to perform.
+            msg_obj (PowerloomSnapshotProcessMessage): The message object containing snapshot task details.
+            task_type (str): The type of task to be performed.
 
         Raises:
-            Exception: If an error occurs while processing the message.
-
-        Returns:
-            None
+            Exception: If an error occurs while processing the snapshots.
         """
         try:
+            # Get the task processor for the given task type
             task_processor = self._project_calculation_mapping[task_type]
 
+            # Compute snapshots in bulk
             snapshots = await task_processor.compute(
                 epoch=msg_obj,
                 redis_conn=self._redis_conn,
@@ -205,18 +227,14 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     'No snapshot data for: {}, skipping...', msg_obj,
                 )
 
-            # No transformation lambdas in bulk mode for now.
-            # Planning to deprecate transformation lambdas in future.
-            # if task_processor.transformation_lambdas:
-            #     for each_lambda in task_processor.transformation_lambdas:
-            #         snapshot = each_lambda(snapshot, msg_obj.data_source, msg_obj.begin, msg_obj.end)
-
         except Exception as e:
+            # Handle exceptions during bulk snapshot processing
             self._logger.opt(exception=True).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
             )
 
+            # Prepare and send failure notification
             notification_message = SnapshotterIssue(
                 instanceID=settings.instance_id,
                 issueType=SnapshotterReportState.MISSED_SNAPSHOT.value,
@@ -230,6 +248,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 client=self._client, message=notification_message,
             )
 
+            # Update Redis with failure state
             await self._redis_conn.hset(
                 name=epoch_id_project_to_state_mapping(
                     epoch_id=msg_obj.epochId, state_id=SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -241,7 +260,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 },
             )
         else:
-
+            # Handle successful bulk snapshot processing
             await self._redis_conn.set(
                 name=last_snapshot_processing_complete_timestamp_key(),
                 value=int(time.time()),
@@ -255,7 +274,9 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
             self._logger.info('Sending snapshots to commit service: {}', snapshots)
 
+            # Process each snapshot in the bulk result
             for project_data_source, snapshot in snapshots:
+                # Parse data sources
                 data_sources = project_data_source.split('_')
                 if len(data_sources) == 1:
                     data_source = data_sources[0]
@@ -263,18 +284,22 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 else:
                     primary_data_source, data_source = data_sources
 
+                # Generate project ID
                 project_id = self._gen_project_id(
                     task_type=task_type, data_source=data_source, primary_data_source=primary_data_source,
                 )
 
+                # Store snapshot in Redis
                 await self._redis_conn.set(
                     name=submitted_base_snapshots_key(
                         epoch_id=msg_obj.epochId, project_id=project_id,
                     ),
                     value=snapshot.json(),
-                    # block time is about 2 seconds on anchor chain, keeping it around ten times the submission window
+                    # Set expiration time (10 times the submission window * 2 seconds)
                     ex=self._submission_window * 10 * 2,
                 )
+
+                # Update Redis with success state
                 p = self._redis_conn.pipeline()
                 p.hset(
                     name=epoch_id_project_to_state_mapping(
@@ -287,25 +312,31 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     },
                 )
                 await p.execute()
-                asyncio.ensure_future(self._commit_payload(
-                    task_type=task_type,
-                    _ipfs_writer_client=self._ipfs_writer_client,
-                    project_id=project_id,
-                    epoch=msg_obj,
-                    snapshot=snapshot,
-                    storage_flag=settings.web3storage.upload_snapshots,
-                ))
 
-    async def _processor_task(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
+                # Commit payload asynchronously
+                task = asyncio.create_task(
+                    self._commit_payload(
+                        task_type=task_type,
+                        _ipfs_writer_client=self._ipfs_writer_client,
+                        project_id=project_id,
+                        epoch=msg_obj,
+                        snapshot=snapshot,
+                        storage_flag=settings.web3storage.upload_snapshots,
+                    ),
+                )
+                self._active_tasks.add(task)
+                task.add_done_callback(lambda _: self._active_tasks.discard(task))
+
+    async def _process_task(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
         Process a PowerloomSnapshotProcessMessage object for a given task type.
+
+        This method initializes necessary components and delegates the processing
+        to either single mode or bulk mode based on the message object.
 
         Args:
             msg_obj (PowerloomSnapshotProcessMessage): The message object to process.
             task_type (str): The type of task to perform.
-
-        Returns:
-            None
         """
         self._logger.debug(
             'Processing callback: {}', msg_obj,
@@ -319,6 +350,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
             return
 
+        # Load rate limiting scripts if not already loaded
         if not self._rate_limiting_lua_scripts:
             self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
                 self._redis_conn,
@@ -328,7 +360,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             task_type, msg_obj,
         )
 
-        # bulk mode
+        # Process in bulk mode or single mode based on the message object
         if msg_obj.bulk_mode:
             await self._process_bulk_mode(msg_obj=msg_obj, task_type=task_type)
         else:
@@ -337,14 +369,13 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
     async def _on_rabbitmq_message(self, message: IncomingMessage):
         """
-        Callback function that is called when a message is received from RabbitMQ.
-        It processes the message and starts the processor task.
+        Callback function for processing messages received from RabbitMQ.
+
+        This method acknowledges the message, initializes the worker,
+        parses the message, and starts the processor task.
 
         Args:
             message (IncomingMessage): The incoming message from RabbitMQ.
-
-        Returns:
-            None
         """
         task_type = message.routing_key.split('.')[-1]
         if task_type not in self._task_types:
@@ -357,6 +388,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
         self._logger.debug('task type: {}', task_type)
 
         try:
+            # Parse the message body into a PowerloomSnapshotProcessMessage object
             msg_obj: PowerloomSnapshotProcessMessage = (
                 PowerloomSnapshotProcessMessage.parse_raw(message.body)
             )
@@ -377,12 +409,17 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
             return
 
-        asyncio.ensure_future(self._processor_task(msg_obj=msg_obj, task_type=task_type))
+        # Start the processor task
+        task = asyncio.create_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
+        self._active_tasks.add(task)
+        task.add_done_callback(lambda _: self._active_tasks.discard(task))
 
     async def _init_project_calculation_mapping(self):
         """
-        Initializes the project calculation mapping by generating a dictionary that maps project types to their corresponding
-        calculation classes.
+        Initialize the project calculation mapping.
+
+        This method creates a dictionary that maps project types to their corresponding
+        calculation classes based on the projects configuration.
 
         Raises:
             Exception: If a duplicate project type is found in the projects configuration.
@@ -401,8 +438,10 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
     async def _init_ipfs_client(self):
         """
-        Initializes the IPFS client by creating a singleton instance of AsyncIPFSClientSingleton
-        and initializing its sessions. The write and read clients are then assigned to instance variables.
+        Initialize the IPFS client.
+
+        This method creates a singleton instance of AsyncIPFSClientSingleton,
+        initializes its sessions, and assigns the write and read clients to instance variables.
         """
         self._ipfs_singleton = AsyncIPFSClientSingleton(settings.ipfs)
         await self._ipfs_singleton.init_sessions()
@@ -411,7 +450,10 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
     async def init_worker(self):
         """
-        Initializes the worker by initializing project calculation mapping, IPFS client, and other necessary components.
+        Initialize the worker.
+
+        This method initializes the project calculation mapping, IPFS client,
+        and other necessary components if they haven't been initialized yet.
         """
         if not self._initialized:
             await self._init_project_calculation_mapping()

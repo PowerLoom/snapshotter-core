@@ -16,11 +16,17 @@ app = typer.Typer()
 
 def process_up(pid):
     """
-    Is the process up?
-    :return: True if process is up
+    Check if a process with the given PID is running.
+
+    Args:
+        pid (int): The process ID to check.
+
+    Returns:
+        bool: True if the process is running, False otherwise.
     """
     p_ = psutil.Process(pid)
     return p_.is_running()
+    # Alternative implementations (commented out):
     # try:
     #     return os.waitpid(pid, os.WNOHANG) is not None
     # except ChildProcessError:  # no child processes
@@ -35,34 +41,41 @@ def process_up(pid):
 @app.command()
 def processReport():
     """
-    This function retrieves process details from Redis cache and prints their running status.
-    It prints the running status of System Event Detector, Processor Distributor, and Worker Processes.
+    Retrieve and print the running status of various processes from Redis cache.
+
+    This function connects to Redis, retrieves process details, and prints the running status of:
+    - System Event Detector
+    - Processor Distributor
+    - Worker Processes
     """
+    # Establish Redis connection
     connection_pool = redis.BlockingConnectionPool(**REDIS_CONN_CONF)
     redis_conn = redis.Redis(connection_pool=connection_pool)
+    
+    # Retrieve process map from Redis
     map_raw = redis_conn.hgetall(
         name=f'powerloom:snapshotter:{settings.namespace}:{settings.instance_id}:Processes',
     )
+
+    # Check System Event Detector status
     event_det_pid = map_raw[b'SystemEventDetector']
     print('\n' + '=' * 20 + 'System Event Detector' + '=' * 20)
     try:
         event_det_pid = int(event_det_pid)
+        print('Event detector process running status: ', process_up(event_det_pid))
     except ValueError:
         print('Event detector pid found in process map not a PID: ', event_det_pid)
-    else:
-        # event_detector_proc = psutil.Process(event_det_pid)
-        print('Event detector process running status: ', process_up(event_det_pid))
 
+    # Check Worker Processor Distributor status
     print('\n' + '=' * 20 + 'Worker Processor Distributor' + '=' * 20)
     proc_dist_pid = map_raw[b'ProcessorDistributor']
     try:
         proc_dist_pid = int(proc_dist_pid)
+        print('Processor distributor process running status: ', process_up(proc_dist_pid))
     except ValueError:
         print('Processor distributor pid found in process map not a PID: ', proc_dist_pid)
-    else:
-        # proc_dist_proc = psutil.Process(proc_dist_pid)
-        print('Processor distributor process running status: ', process_up(proc_dist_pid))
 
+    # Check Worker Processes status
     print('\n' + '=' * 20 + 'Worker Processes' + '=' * 20)
     cb_worker_map = map_raw[b'callback_workers']
     try:
@@ -70,6 +83,7 @@ def processReport():
     except json.JSONDecodeError:
         print('Callback worker entries in cache corrupted...', cb_worker_map)
         return
+
     for worker_type, worker_details in cb_worker_map.items():
         section_name = worker_type.capitalize()
         print('\n' + '*' * 10 + section_name + '*' * 10)
@@ -81,11 +95,9 @@ def processReport():
             proc_pid = worker_details['pid']
             try:
                 proc_pid = int(proc_pid)
+                print('Process name ' + worker_details['id'] + ' running status: ', process_up(proc_pid))
             except ValueError:
                 print(f'Process name {worker_details["id"]} pid found in process map not a PID: ', proc_pid)
-            else:
-                # proc = psutil.Process(proc_pid)
-                print('Process name ' + worker_details['id'] + ' running status: ', process_up(proc_pid))
 
 
 # https://typer.tiangolo.com/tutorial/commands/context/#configuring-the-context
@@ -94,14 +106,14 @@ def processReport():
 )
 def start(ctx: typer.Context, process_str_id: str):
     """
-    Starts a process with the given process_str_id by sending a command to ProcessHubCore through RabbitMQ.
+    Start a process with the given process_str_id by sending a command to ProcessHubCore through RabbitMQ.
 
     Args:
-    - ctx: typer.Context object
-    - process_str_id: str, the identifier of the process to be started
+        ctx (typer.Context): The Typer context object.
+        process_str_id (str): The identifier of the process to be started.
 
     Returns:
-    - None
+        None
     """
     if process_str_id not in PROC_STR_ID_TO_CLASS_MAP.keys():
         typer.secho(
@@ -112,10 +124,13 @@ def start(ctx: typer.Context, process_str_id: str):
         return
     kwargs = dict()
 
+    # Create RabbitMQ connection and channel
     typer.secho('Creating RabbitMQ connection...', fg=typer.colors.GREEN)
     c = create_rabbitmq_conn()
     typer.secho('Opening RabbitMQ channel...', fg=typer.colors.GREEN)
     ch = c.channel()
+
+    # Prepare and send the command
     proc_hub_cmd = ProcessHubCommand(
         command='start',
         proc_str_id=process_str_id,
@@ -147,6 +162,7 @@ def stop(
         None
     """
     if not pid:
+        # Stop process by name
         if (
             process_str_id not in PROC_STR_ID_TO_CLASS_MAP.keys() and
             process_str_id != 'self'
@@ -158,6 +174,7 @@ def stop(
             )
             return
         else:
+            # Create RabbitMQ connection and channel
             typer.secho(
                 'Creating RabbitMQ connection...',
                 fg=typer.colors.GREEN,
@@ -165,6 +182,8 @@ def stop(
             c = create_rabbitmq_conn()
             typer.secho('Opening RabbitMQ channel...', fg=typer.colors.GREEN)
             ch = c.channel()
+
+            # Prepare and send the command
             proc_hub_cmd = ProcessHubCommand(
                 command='stop',
                 proc_str_id=process_str_id,
@@ -175,11 +194,15 @@ def stop(
                 fg=typer.colors.YELLOW,
             )
     else:
+        # Stop process by PID
         process_str_id = int(process_str_id)
+        # Create RabbitMQ connection and channel
         typer.secho('Creating RabbitMQ connection...', fg=typer.colors.GREEN)
         c = create_rabbitmq_conn()
         typer.secho('Opening RabbitMQ channel...', fg=typer.colors.GREEN)
         ch = c.channel()
+
+        # Prepare and send the command
         proc_hub_cmd = ProcessHubCommand(
             command='stop',
             pid=process_str_id,
@@ -194,11 +217,17 @@ def stop(
 @app.command()
 def respawn():
     """
-    Sends a 'respawn' command to the ProcessHubCore via RabbitMQ.
+    Send a 'respawn' command to the ProcessHubCore via RabbitMQ.
+
+    This function creates a RabbitMQ connection, opens a channel, and sends a 'respawn' command
+    to the ProcessHubCore.
     """
+    # Create RabbitMQ connection and channel
     c = create_rabbitmq_conn()
     typer.secho('Opening RabbitMQ channel...', fg=typer.colors.GREEN)
     ch = c.channel()
+
+    # Prepare and send the command
     proc_hub_cmd = ProcessHubCommand(
         command='respawn',
     )

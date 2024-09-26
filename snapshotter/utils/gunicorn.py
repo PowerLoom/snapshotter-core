@@ -6,15 +6,25 @@ from gunicorn.glogging import Logger
 
 from snapshotter.utils.default_logger import logger
 
+# Set the log level based on the environment variable 'LOG_LEVEL', defaulting to 'DEBUG'
 LOG_LEVEL = logging.getLevelName(os.environ.get('LOG_LEVEL', 'DEBUG'))
 
 
 class InterceptHandler(logging.Handler):
     """
     A custom logging handler that intercepts log records and forwards them to Loguru logger.
+
+    This handler is designed to bridge the gap between Python's standard logging
+    and the Loguru logger, allowing for seamless integration of both logging systems.
     """
 
     def emit(self, record):
+        """
+        Emit a log record by forwarding it to the Loguru logger.
+
+        :param record: The log record to be emitted
+        :type record: logging.LogRecord
+        """
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name
@@ -27,6 +37,7 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
+        # Log the message using Loguru
         logger.opt(depth=depth, exception=record.exc_info).log(
             level,
             record.getMessage(),
@@ -43,11 +54,23 @@ class StubbedGunicornLogger(Logger):
     """
 
     def setup(self, cfg):
+        """
+        Set up the logger with NullHandlers and configure log levels.
+
+        :param cfg: Gunicorn configuration object
+        :type cfg: gunicorn.config.Config
+        """
         handler = logging.NullHandler()
+        
+        # Set up error logger
         self.error_logger = logging.getLogger('gunicorn.error')
         self.error_logger.addHandler(handler)
+        
+        # Set up access logger
         self.access_logger = logging.getLogger('gunicorn.access')
         self.access_logger.addHandler(handler)
+        
+        # Set log levels
         self.error_log.setLevel(LOG_LEVEL)
         self.access_log.setLevel(LOG_LEVEL)
 
@@ -55,15 +78,18 @@ class StubbedGunicornLogger(Logger):
 class StandaloneApplication(BaseApplication):
     """
     A standalone Gunicorn application that can be run without a Gunicorn server.
+
+    This class allows for programmatic configuration and running of a Gunicorn server
+    with a given WSGI application.
     """
 
     def __init__(self, app, options=None):
         """
         Initialize the Gunicorn server with the given app and options.
 
-        :param app: The WSGI application to run.
+        :param app: The WSGI application to run
         :type app: callable
-        :param options: Optional dictionary of configuration options.
+        :param options: Optional dictionary of configuration options
         :type options: dict
         """
         self.options = options or {}
@@ -76,8 +102,6 @@ class StandaloneApplication(BaseApplication):
 
         This function loads the configuration for the Gunicorn server from the options
         provided by the user. It sets the configuration values in the `cfg` object.
-
-        :return: None
         """
         config = {
             key: value
@@ -90,5 +114,8 @@ class StandaloneApplication(BaseApplication):
     def load(self):
         """
         Load the application and return it.
+
+        :return: The WSGI application
+        :rtype: callable
         """
         return self.application

@@ -1,4 +1,3 @@
-import uuid
 from typing import Any
 from typing import Dict
 from typing import List
@@ -9,6 +8,7 @@ from pydantic import Field
 
 
 class TxLogsModel(BaseModel):
+    """Model representing transaction logs."""
     logIndex: str
     blockNumber: str
     blockHash: str
@@ -20,11 +20,12 @@ class TxLogsModel(BaseModel):
 
 
 class EthTransactionReceipt(BaseModel):
+    """Model representing an Ethereum transaction receipt."""
     transactionHash: str
     transactionIndex: str
     blockHash: str
     blockNumber: str
-    from_field: str = Field(..., alias='from')
+    from_field: str = Field(..., alias='from')  # 'from' is a reserved keyword in Python
     to: Optional[str]
     cumulativeGasUsed: str
     gasUsed: str
@@ -38,18 +39,22 @@ class EthTransactionReceipt(BaseModel):
 
 
 class EpochBase(BaseModel):
+    """Base model for epoch-related data."""
     epochId: int
     begin: int
     end: int
 
 
 class PowerloomSnapshotProcessMessage(EpochBase):
+    """Model for Powerloom snapshot process messages."""
     data_source: Optional[str] = None
     primary_data_source: Optional[str] = None
     genesis: Optional[bool] = False
     bulk_mode: Optional[bool] = False
 
+
 class PowerloomSnapshotFinalizedMessage(BaseModel):
+    """Model for Powerloom snapshot finalized messages."""
     epochId: int
     projectId: str
     snapshotCid: str
@@ -57,12 +62,14 @@ class PowerloomSnapshotFinalizedMessage(BaseModel):
 
 
 class PowerloomProjectsUpdatedMessage(BaseModel):
+    """Model for Powerloom project update messages."""
     projectId: str
     allowed: bool
     enableEpochId: int
 
 
 class PowerloomSnapshotSubmittedMessage(BaseModel):
+    """Model for Powerloom snapshot submission messages."""
     snapshotCid: str
     epochId: int
     projectId: str
@@ -70,6 +77,7 @@ class PowerloomSnapshotSubmittedMessage(BaseModel):
 
 
 class PowerloomDelegateWorkerRequestMessage(BaseModel):
+    """Model for Powerloom delegate worker request messages."""
     epochId: int
     requestId: int
     task_type: str
@@ -77,22 +85,26 @@ class PowerloomDelegateWorkerRequestMessage(BaseModel):
 
 
 class PowerloomDelegateWorkerResponseMessage(BaseModel):
+    """Model for Powerloom delegate worker response messages."""
     epochId: int
     requestId: int
 
 
 class PowerloomDelegateTxReceiptWorkerResponseMessage(PowerloomDelegateWorkerResponseMessage):
+    """Model for Powerloom delegate transaction receipt worker response messages."""
     txHash: str
     txReceipt: Dict[Any, Any]
 
 
 class PowerloomCalculateAggregateMessage(BaseModel):
+    """Model for Powerloom calculate aggregate messages."""
     messages: List[PowerloomSnapshotSubmittedMessage]
     epochId: int
     timestamp: int
 
 
 class ProcessHubCommand(BaseModel):
+    """Model for process hub commands."""
     command: str
     pid: Optional[int] = None
     proc_str_id: Optional[str] = None
@@ -100,10 +112,12 @@ class ProcessHubCommand(BaseModel):
 
 
 class AggregateBase(BaseModel):
+    """Base model for aggregate-related data."""
     epochId: int
 
 
 class PayloadCommitMessage(BaseModel):
+    """Model for payload commit messages."""
     sourceChainId: int
     projectId: str
     epochId: int
@@ -111,6 +125,7 @@ class PayloadCommitMessage(BaseModel):
 
 
 class PayloadCommitFinalizedMessage(BaseModel):
+    """Model for payload commit finalized messages."""
     message: PowerloomSnapshotFinalizedMessage
     web3Storage: bool
     sourceChainId: int

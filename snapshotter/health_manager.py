@@ -35,6 +35,13 @@ from snapshotter.utils.redis.redis_keys import process_hub_core_start_timestamp
 
 
 class HealthManager(multiprocessing.Process):
+    """
+    A class responsible for managing the health of the snapshotter system.
+
+    This class performs periodic health checks, monitors epoch processing,
+    and can initiate respawn commands when issues are detected.
+    """
+
     _aioredis_pool: RedisPoolCache
     _redis_conn: aioredis.Redis
     _async_transport: AsyncHTTPTransport
@@ -52,15 +59,13 @@ class HealthManager(multiprocessing.Process):
             _rabbitmq_interactor: The RabbitMQ interactor object.
             _shutdown_initiated (bool): Flag indicating if shutdown has been initiated.
             _initialized (bool): Flag indicating if the HealthManager has been initialized.
-            _shutdown_initiated (bool): Flag indicating if shutdown has been initiated.
             _last_epoch_processing_health_check (int): Timestamp of the last epoch processing health check.
+            _last_epoch_checked (int): The last epoch ID that was checked.
         """
         super(HealthManager, self).__init__(name=name, **kwargs)
         self._rabbitmq_interactor = None
         self._shutdown_initiated = False
         self._initialized = False
-
-        self._shutdown_initiated = False
         self._last_epoch_processing_health_check = 0
         self._last_epoch_checked = 0
 
@@ -78,9 +83,6 @@ class HealthManager(multiprocessing.Process):
 
         The RabbitMQ connection pool is used to manage a pool of connections to the RabbitMQ server,
         while the channel pool is used to manage a pool of channels for each connection.
-
-        Returns:
-            None
         """
         self._rmq_connection_pool = Pool(
             get_rabbitmq_robust_connection_async,
@@ -94,6 +96,9 @@ class HealthManager(multiprocessing.Process):
     async def _init_httpx_client(self):
         """
         Initializes the HTTPX client with the specified settings.
+
+        This method sets up an AsyncHTTPTransport with custom limits and timeouts,
+        and creates an AsyncClient for making HTTP requests.
         """
         self._async_transport = AsyncHTTPTransport(
             limits=Limits(
@@ -121,12 +126,6 @@ class HealthManager(multiprocessing.Process):
         This method creates a ProcessHubCommand object with the command 'respawn',
         acquires a channel from the channel pool, gets the exchange, and publishes
         the command message to the exchange.
-
-        Args:
-            None
-
-        Returns:
-            None
         """
         proc_hub_cmd = ProcessHubCommand(
             command='respawn',
@@ -142,8 +141,10 @@ class HealthManager(multiprocessing.Process):
 
     async def init_worker(self):
         """
-        Initializes the worker by initializing the Redis pool, RPC helper, loading project metadata,
-        initializing the RabbitMQ connection, and initializing the preloader compute mapping.
+        Initializes the worker by setting up Redis, RabbitMQ, and HTTP client connections.
+
+        This method is called once to set up all necessary connections and pools
+        before the HealthManager starts its main loop.
         """
         if not self._initialized:
             await self._init_redis_pool()
@@ -159,32 +160,30 @@ class HealthManager(multiprocessing.Process):
             int: The start time of the process hub core, or 0 if not found.
         """
         _ = await self._redis_conn.get(process_hub_core_start_timestamp())
-        if _:
-            return int(_)
-        else:
-            return 0
+        return int(_) if _ else 0
 
     async def _epoch_processing_health_check(self, current_epoch_id):
         """
         Perform health check for epoch processing.
 
+        This method checks various conditions to ensure that epoch processing
+        is functioning correctly. It may send failure notifications or respawn
+        commands if issues are detected.
+
         Args:
             current_epoch_id (int): The current epoch ID.
-
-        Returns:
-            None
         """
-        # TODO: make the threshold values configurable.
-        # Range of epochs to be checked, success percentage/criteria, offset from current epoch
+        # Skip check if current epoch is too low
         if current_epoch_id < 5:
             return
-        # get last set start time by proc hub core
+
+        # Get last set start time by proc hub core
         start_time = await self._get_proc_hub_start_time()
 
-        # only start if 5 minutes have passed since proc hub core start time
+        # Only start if 5 minutes have passed since proc hub core start time
         if int(time.time()) - start_time < 5 * 60:
             self._logger.info(
-                'Skipping epoch processing health check because 5 minutes have not passed since proc hub core start time',
+                'Skipping epoch processing health check because 5 minutes have not passed since proc hub core start time'
             )
             return
 
@@ -192,15 +191,17 @@ class HealthManager(multiprocessing.Process):
             self._logger.info('Skipping epoch processing health check because proc hub start time is not set')
             return
 
-        # only runs once every minute
-        if self._last_epoch_processing_health_check != 0 and int(time.time()) - self._last_epoch_processing_health_check < 60:
+        # Only run once every minute
+        if (self._last_epoch_processing_health_check != 0 and 
+            int(time.time()) - self._last_epoch_processing_health_check < 60):
             self._logger.debug(
-                'Skipping epoch processing health check because it was run less than a minute ago',
+                'Skipping epoch processing health check because it was run less than a minute ago'
             )
             return
 
         self._last_epoch_processing_health_check = int(time.time())
 
+        # Fetch last epoch detected and last snapshot processed timestamps
         last_epoch_detected = await self._redis_conn.get(last_epoch_detected_timestamp_key())
         last_snapshot_processed = await self._redis_conn.get(last_snapshot_processing_complete_timestamp_key())
 
@@ -210,15 +211,16 @@ class HealthManager(multiprocessing.Process):
         if last_snapshot_processed:
             last_snapshot_processed = int(last_snapshot_processed)
 
+        # Handle first run or no new epoch detected
         if self._last_epoch_checked == 0:
             self._logger.info(
-                'Skipping epoch processing health check because this is the first run with no reference of last epoch checked by this service',
+                'Skipping epoch processing health check because this is the first run with no reference of last epoch checked by this service'
             )
             self._last_epoch_checked = current_epoch_id
             return
         elif current_epoch_id == self._last_epoch_checked:
             self._logger.info(
-                'Skipping epoch processing health check because no new epoch was detected since last check. Probably Prost network is not producing new blocks',
+                'Skipping epoch processing health check because no new epoch was detected since last check. Probably Prost network is not producing new blocks'
             )
             await send_failure_notifications_async(
                 client=self._client,
@@ -232,17 +234,17 @@ class HealthManager(multiprocessing.Process):
                         {
                             'last_epoch_checked': self._last_epoch_checked,
                             'current_epoch_id': current_epoch_id,
-                            'reason': 'No new epoch detected since last check. Probably Prost network is not producing new blocks',
-                        },
+                            'reason': 'No new epoch detected since last check. Probably Prost network is not producing new blocks'
+                        }
                     ),
                 ),
             )
             return
 
-        # if no epoch is detected for 5 minutes, report unhealthy and send respawn command
+        # Check if no epoch is detected for 5 minutes
         if last_epoch_detected and int(time.time()) - last_epoch_detected > 5 * 60:
             self._logger.debug(
-                'Sending unhealthy epoch report to reporting service due to no epoch detected for ~30 epochs',
+                'Sending unhealthy epoch report to reporting service due to no epoch detected for ~30 epochs'
             )
             await send_failure_notifications_async(
                 client=self._client,
@@ -255,24 +257,22 @@ class HealthManager(multiprocessing.Process):
                     extra=json.dumps(
                         {
                             'last_epoch_detected': last_epoch_detected,
-                        },
+                        }
                     ),
                 ),
             )
             self._logger.info(
-                'Sending respawn command for all process hub core children because no epoch was detected for ~30 epochs',
+                'Sending respawn command for all process hub core children because no epoch was detected for ~30 epochs'
             )
             await self._send_proc_hub_respawn()
             self._last_epoch_checked = current_epoch_id
-            # return so that no overlapping respawns are sent
             return
 
-        # if time difference between last epoch detected and last snapshot processed
-        # is more than 5 minutes, report unhealthy and send respawn command
-        if last_epoch_detected and last_snapshot_processed and \
-                last_epoch_detected - last_snapshot_processed > 5 * 60:
+        # Check if time difference between last epoch detected and last snapshot processed is too large
+        if (last_epoch_detected and last_snapshot_processed and 
+            last_epoch_detected - last_snapshot_processed > 5 * 60):
             self._logger.debug(
-                'Sending unhealthy epoch report to reporting service due to no snapshot processing for ~30 epochs',
+                'Sending unhealthy epoch report to reporting service due to no snapshot processing for ~30 epochs'
             )
             await send_failure_notifications_async(
                 client=self._client,
@@ -286,21 +286,20 @@ class HealthManager(multiprocessing.Process):
                         {
                             'last_epoch_detected': last_epoch_detected,
                             'last_snapshot_processed': last_snapshot_processed,
-                        },
+                        }
                     ),
                 ),
             )
             self._logger.info(
-                'Sending respawn command for all process hub core children because no snapshot processing was done for ~30 epochs',
+                'Sending respawn command for all process hub core children because no snapshot processing was done for ~30 epochs'
             )
             await self._send_proc_hub_respawn()
             self._last_epoch_checked = current_epoch_id
-            # return so that no overlapping respawns are sent
             return
         else:
-            # check for epoch processing status
+            # Check for epoch processing status
             epoch_health = dict()
-            # check from previous epoch processing status until 2 further epochs
+            # Check from previous epoch processing status until 2 further epochs
             build_state_val = SnapshotterStates.SNAPSHOT_BUILD.value
             for epoch_id in range(current_epoch_id - 1, current_epoch_id - 3 - 1, -1):
                 epoch_specific_report = SnapshotterEpochProcessingReportItem.construct()
@@ -353,18 +352,27 @@ class HealthManager(multiprocessing.Process):
                         extra=json.dumps(
                             {
                                 'epoch_health': epoch_health,
-                            },
+                            }
                         ),
                     ),
                 )
                 self._logger.info(
-                    'Sending respawn command for all process hub core children because epochs were found unhealthy: {}', epoch_health,
+                    'Sending respawn command for all process hub core children because epochs were found unhealthy: {}',
+                    epoch_health,
                 )
                 await self._send_proc_hub_respawn()
         self._last_epoch_checked = current_epoch_id
 
     async def _check_health(self, loop):
-        # will do constant health checks and send respawn command if unhealthy
+        """
+        Continuously checks the health of the system.
+
+        This method runs in a loop, performing health checks every 60 seconds.
+        It will break the loop if a shutdown is initiated.
+
+        Args:
+            loop (asyncio.AbstractEventLoop): The event loop to use for scheduling tasks.
+        """
         while True:
             await asyncio.sleep(60)
             if self._shutdown_initiated:
@@ -377,11 +385,14 @@ class HealthManager(multiprocessing.Process):
 
     def run(self) -> None:
         """
-        Runs the HealthManager by setting resource limits, registering signal handlers,
-        initializing the worker, starting the RabbitMQ consumer, and running the event loop.
+        Runs the HealthManager by setting resource limits, initializing the worker,
+        and starting the health check loop.
+
+        This method sets up the event loop, initializes all necessary components,
+        and starts the main health check loop.
         """
         self._logger = logger.bind(
-            module=f'HealthManager',
+            module='HealthManager',
         )
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
@@ -393,7 +404,7 @@ class HealthManager(multiprocessing.Process):
         ev_loop = asyncio.get_event_loop()
         ev_loop.run_until_complete(self.init_worker())
 
-        self._logger.debug('Staring Health Manager')
+        self._logger.debug('Starting Health Manager')
         asyncio.ensure_future(
             self._check_health(ev_loop),
         )

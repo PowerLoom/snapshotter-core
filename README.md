@@ -690,12 +690,6 @@ There are a couple of important concepts here necessary to write your extraction
 - `redis` (async redis connection)
 - `rpc_helper` ([`RpcHelper`](pooler/utils/rpc.py) instance to help with any calls to the data source contract's chain)
 
-* `transformation_lambdas` provide an additional layer for computation on top of the generated snapshot (if needed). If `compute` function handles everything you can just set `transformation_lambdas` to `[]` otherwise pass the list of transformation function sequence. Each function referenced in `transformation_lambdas` must have same input interface. It should receive the following inputs -
- - `snapshot` (the generated snapshot to apply transformation on)
- - `address` (contract address to extract data from)
- - `epoch_begin` (epoch begin block)
- - `epoch_end` (epoch end block)
-
 Output format can be anything depending on the usecase requirements. Although it is recommended to use proper [`pydantic`](https://pypi.org/project/pydantic/) models to define the snapshot interface.
 
 The resultant output model in this specific example is `UniswapTradesSnapshot` as defined in the Uniswap v2 specific modules directory: [`utils/models/message_models.py`](https://github.com/PowerLoom/snapshotter-computes/blob/6fb98b1bbc22be8b5aba8bdc860004d35786f4df/utils/models/message_models.py#L47-L54). This encapsulates state information captured by `TradeVolumeProcessor` between the block heights of the epoch: `min_chain_height` and `max_chain_height`.
@@ -732,7 +726,7 @@ https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990
         "projectId": "pairContract_trade_volume"
       },
       "processor": {
-        "module": "snapshotter.modules.computes.aggregate.single_uniswap_trade_volume_24h",
+        "module": "computes.aggregate.single_uniswap_trade_volume_24h",
         "class_name": "AggregateTradeVolumeProcessor"
       }
     }
@@ -773,12 +767,6 @@ https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990
   * `epoch` (current epoch details)
   * `redis` (async redis connection)
   * `rpc_helper` ([`RpcHelper`](pooler/utils/rpc.py) instance to help with any calls to the data source contract's chain)
-
-* `transformation_lambdas` provide an additional layer for computation on top of the generated snapshot (if needed). If the `compute()` callback handles everything you can just set `transformation_lambdas` to `[]` otherwise pass the list of transformation function sequences. Each function referenced in `transformation_lambdas` must have the same input interface. It should receive the following inputs -
-  * `snapshot` (the generated snapshot to apply the transformation on)
-  * `address` (contract address to extract data from)
-  * `epoch_begin` (epoch begin block)
-  * `epoch_end` (epoch end block)
 
 `compute()` should return an instance of a Pydantic model which is in turn uploaded to IPFS by the payload commit service helper method.
 

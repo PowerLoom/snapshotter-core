@@ -11,3 +11,7 @@ uniswapTokenData
 config/*settings.json
 **/*.backup
 .vscode/*
+snapshotter-lite-local-collector
+config
+computes
+logs
