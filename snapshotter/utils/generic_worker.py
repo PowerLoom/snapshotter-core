@@ -190,7 +190,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._initialized = False
         # Task tracking
         self._active_tasks: Set[asyncio.Task] = set()
-        self._task_timeout = 300  # 5 minutes
+        self._task_timeout = 900  # 15 minutes
         self._task_cleanup_interval = 60  # 1 minute
 
     def _signal_handler(self, signum, frame):
