@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import json
 import multiprocessing
 import resource
@@ -324,14 +325,21 @@ class GenericAsyncWorker(multiprocessing.Process):
 
     def _signal_handler(self, signum, frame):
         """
-        Signal handler function that cancels the core RMQ consumer when a SIGINT, SIGTERM or SIGQUIT signal is received.
-
-        Args:
-            signum (int): The signal number.
-            frame (frame): The current stack frame at the time the signal was received.
+        Signal handler function that initiates the cleanup process when a SIGINT, SIGTERM or SIGQUIT signal is received.
         """
+        self._logger.info(f'Received signal {signum}. Initiating shutdown...')
         if signum in [SIGINT, SIGTERM, SIGQUIT]:
+            asyncio.create_task(self._shutdown())
+
+    async def _shutdown(self):
+        """
+        Performs a graceful shutdown of the worker.
+        """
+        self._logger.info('Shutting down worker...')
+        if hasattr(self, '_core_rmq_consumer'):
             self._core_rmq_consumer.cancel()
+        await self.cleanup()
+        asyncio.get_event_loop().stop()
 
     @retry(
         wait=wait_random_exponential(multiplier=1, max=10),
@@ -788,8 +796,64 @@ class GenericAsyncWorker(multiprocessing.Process):
         """
         Cleans up resources by closing all streams in the pool and the gRPC channel.
         """
-        await self.stream_pool.close_all()
-        await self._grpc_channel.close()
+        self._logger.info('Cleaning up resources...')
+        if hasattr(self, 'stream_pool'):
+            await self.stream_pool.close_all()
+        if hasattr(self, '_grpc_channel'):
+            await self._grpc_channel.close()
+        if hasattr(self, '_client'):
+            await self._client.aclose()
+        if hasattr(self, '_web3_storage_upload_client'):
+            await self._web3_storage_upload_client.aclose()
+        self._logger.info('Cleanup completed.')
+
+    def run(self) -> None:
+        """
+        Runs the worker by setting up the environment and starting the main event loop.
+        """
+        self._logger = logger.bind(module=self.name)
+
+        # Set resource limits
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(
+            resource.RLIMIT_NOFILE,
+            (settings.rlimit.file_descriptors, hard),
+        )
+
+        # Register signal handlers
+        for signame in [SIGINT, SIGTERM, SIGQUIT]:
+            signal(signame, self._signal_handler)
+
+        # Register cleanup function to be called at exit
+        atexit.register(lambda: asyncio.get_event_loop().run_until_complete(self.cleanup()))
+
+        # Set up and run the event loop
+        ev_loop = asyncio.get_event_loop()
+        self._logger.debug(f'Starting asynchronous callback worker {self._unique_id}...')
+        self._core_rmq_consumer = asyncio.ensure_future(self._rabbitmq_consumer(ev_loop))
+        try:
+            ev_loop.run_forever()
+        finally:
+            ev_loop.run_until_complete(self.cleanup())
+            ev_loop.close()
+
+    async def _cleanup_tasks(self):
+        """
+        Periodically clean up completed or timed-out tasks.
+
+        This method runs in an infinite loop, periodically checking all active tasks
+        and removing those that are completed or have timed out.
+        """
+        while True:
+            await asyncio.sleep(self._task_cleanup_interval)
+            current_time = time.time()
+            for task in list(self._active_tasks):
+                if task.done():
+                    self._active_tasks.discard(task)
+                elif current_time - task.get_coro().cr_frame.f_locals.get('start_time', 0) > self._task_timeout:
+                    self._logger.warning(f'Task {task} timed out. Cancelling...')
+                    task.cancel()
+                    self._active_tasks.discard(task)
 
     async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
         """
@@ -901,50 +965,3 @@ class GenericAsyncWorker(multiprocessing.Process):
             asyncio.create_task(self._cleanup_tasks())
 
         self._initialized = True
-
-    def run(self) -> None:
-        """
-        Runs the worker by setting up the environment and starting the main event loop.
-
-        This method sets resource limits, registers signal handlers, starts the RabbitMQ consumer,
-        and runs the event loop until it is stopped.
-        """
-        self._logger = logger.bind(module=self.name)
-
-        # Set resource limits
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        resource.setrlimit(
-            resource.RLIMIT_NOFILE,
-            (settings.rlimit.file_descriptors, hard),
-        )
-
-        # Register signal handlers
-        for signame in [SIGINT, SIGTERM, SIGQUIT]:
-            signal(signame, self._signal_handler)
-
-        # Set up and run the event loop
-        ev_loop = asyncio.get_event_loop()
-        self._logger.debug(f'Starting asynchronous callback worker {self._unique_id}...')
-        self._core_rmq_consumer = asyncio.ensure_future(self._rabbitmq_consumer(ev_loop))
-        try:
-            ev_loop.run_forever()
-        finally:
-            ev_loop.close()
-
-    async def _cleanup_tasks(self):
-        """
-        Periodically clean up completed or timed-out tasks.
-
-        This method runs in an infinite loop, periodically checking all active tasks
-        and removing those that are completed or have timed out.
-        """
-        while True:
-            await asyncio.sleep(self._task_cleanup_interval)
-            current_time = time.time()
-            for task in list(self._active_tasks):
-                if task.done():
-                    self._active_tasks.discard(task)
-                elif current_time - task.get_coro().cr_frame.f_locals.get('start_time', 0) > self._task_timeout:
-                    self._logger.warning(f'Task {task} timed out. Cancelling...')
-                    task.cancel()
-                    self._active_tasks.discard(task)
