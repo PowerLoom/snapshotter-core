@@ -3,14 +3,12 @@ import json
 import multiprocessing
 import resource
 import time
-from contextlib import asynccontextmanager
 from functools import partial
 from signal import SIGINT
 from signal import signal
 from signal import SIGQUIT
 from signal import SIGTERM
 from typing import Dict
-from typing import List
 from typing import Set
 from typing import Union
 from uuid import uuid4
@@ -29,6 +27,8 @@ from eip712_structs import Uint
 from eth_utils.crypto import keccak
 from eth_utils.encoding import big_endian_to_int
 from grpclib.client import Channel
+from grpclib.const import Status
+from grpclib.exceptions import GRPCError
 from grpclib.exceptions import StreamTerminatedError
 from httpx import AsyncClient
 from httpx import AsyncHTTPTransport
@@ -71,6 +71,13 @@ from snapshotter.utils.rpc import RpcHelper
 class EIPRequest(EIP712Struct):
     """
     Represents an EIP712 structured request for snapshot submission.
+
+    Attributes:
+        slotId (Uint): The slot ID for the snapshot.
+        deadline (Uint): The deadline for the snapshot submission.
+        snapshotCid (String): The CID of the snapshot.
+        epochId (Uint): The epoch ID of the snapshot.
+        projectId (String): The project ID associated with the snapshot.
     """
     slotId = Uint()
     deadline = Uint()
@@ -83,6 +90,8 @@ def web3_storage_retry_state_callback(retry_state: tenacity.RetryCallState):
     """
     Callback function to handle retry attempts for web3 storage upload.
 
+    This function logs a warning message when a web3 storage upload fails and a retry is attempted.
+
     Args:
         retry_state (tenacity.RetryCallState): The current state of the retry call.
 
@@ -91,13 +100,16 @@ def web3_storage_retry_state_callback(retry_state: tenacity.RetryCallState):
     """
     if retry_state and retry_state.outcome.failed:
         logger.warning(
-            f'Encountered web3 storage upload exception: {retry_state.outcome.exception()} | args: {retry_state.args}, kwargs:{retry_state.kwargs}',
+            f'Encountered web3 storage upload exception: {retry_state.outcome.exception()} | '
+            f'args: {retry_state.args}, kwargs:{retry_state.kwargs}',
         )
 
 
 def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
     """
     Callback function to handle retry attempts for snapshot submission.
+
+    This function logs appropriate messages based on the retry attempt status and outcome.
 
     Args:
         retry_state (tenacity.RetryCallState): The current state of the retry call.
@@ -107,9 +119,9 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
     """
     if retry_state.attempt_number >= 3:
         logger.error(
-            'Txn signing worker failed after 3 attempts | Txn payload: {} | Signer: {}', retry_state.kwargs[
-                'txn_payload'
-            ], retry_state.kwargs['signer_in_use'].address,
+            'Txn signing worker failed after 3 attempts | Txn payload: {} | Signer: {}',
+            retry_state.kwargs['txn_payload'],
+            retry_state.kwargs['signer_in_use'].address,
         )
     else:
         if retry_state.outcome.failed:
@@ -117,26 +129,30 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
                 # Reassigning the signer object to ensure nonce is reset
                 retry_state.kwargs['signer_in_use'] = retry_state.args[0]._signer
                 logger.warning(
-                    'Tx signing worker attempt number {} result {} failed with nonce exception | Reset nonce and reassigned signer object: {} with nonce {} | Txn payload: {}',
-                    retry_state.attempt_number, retry_state.outcome, retry_state.kwargs['signer_in_use'].address,
+                    'Tx signing worker attempt number {} result {} failed with nonce exception | '
+                    'Reset nonce and reassigned signer object: {} with nonce {} | Txn payload: {}',
+                    retry_state.attempt_number, retry_state.outcome,
+                    retry_state.kwargs['signer_in_use'].address,
                     retry_state.kwargs['signer_in_use'].nonce, retry_state.kwargs['txn_payload'],
                 )
             else:
                 logger.warning(
                     'Tx signing worker attempt number {} result {} failed with exception {} | Txn payload: {}',
-                    retry_state.attempt_number, retry_state.outcome, retry_state.outcome.exception(
-                    ), retry_state.kwargs['txn_payload'],
+                    retry_state.attempt_number, retry_state.outcome,
+                    retry_state.outcome.exception(), retry_state.kwargs['txn_payload'],
                 )
         logger.warning(
             'Tx signing worker {} attempt number {} result {} | Txn payload: {}',
-            retry_state.kwargs['signer_in_use'].address, retry_state.attempt_number, retry_state.outcome,
-            retry_state.kwargs['txn_payload'],
+            retry_state.kwargs['signer_in_use'].address, retry_state.attempt_number,
+            retry_state.outcome, retry_state.kwargs['txn_payload'],
         )
 
 
 def ipfs_upload_retry_state_callback(retry_state: tenacity.RetryCallState):
     """
     Callback function to handle retry attempts for IPFS uploads.
+
+    This function logs a warning message when an IPFS upload fails and a retry is attempted.
 
     Args:
         retry_state (tenacity.RetryCallState): The current state of the retry attempt.
@@ -146,32 +162,71 @@ def ipfs_upload_retry_state_callback(retry_state: tenacity.RetryCallState):
     """
     if retry_state and retry_state.outcome.failed:
         logger.warning(
-            f'Encountered ipfs upload exception: {retry_state.outcome.exception()} | args: {retry_state.args}, kwargs:{retry_state.kwargs}',
+            f'Encountered ipfs upload exception: {retry_state.outcome.exception()} | '
+            f'args: {retry_state.args}, kwargs:{retry_state.kwargs}',
         )
 
 
 class StreamPool:
+    """
+    A pool of gRPC streams for efficient communication with the collector.
+
+    This class manages a pool of gRPC streams, creating new streams as needed and
+    removing expired ones.
+
+    Attributes:
+        _grpc_stub (SubmissionStub): The gRPC stub for communication.
+        pool_size (int): The maximum number of streams in the pool.
+        max_stream_age (int): The maximum age of a stream in seconds.
+        streams (list): A list of active streams.
+        lock (asyncio.Lock): A lock for thread-safe operations on the stream pool.
+    """
+
     def __init__(self, grpc_stub, pool_size=3, max_stream_age=3600):
+        """
+        Initialize the StreamPool.
+
+        Args:
+            grpc_stub (SubmissionStub): The gRPC stub for communication.
+            pool_size (int, optional): The maximum number of streams in the pool. Defaults to 3.
+            max_stream_age (int, optional): The maximum age of a stream in seconds. Defaults to 3600.
+        """
         self._grpc_stub = grpc_stub
         self.pool_size = pool_size
         self.max_stream_age = max_stream_age
-        self.streams: List[Dict] = []
+        self.streams = []
         self.lock = asyncio.Lock()
 
     async def get_stream(self):
+        """
+        Get an available stream from the pool or create a new one if necessary.
+
+        This method removes expired streams, returns an existing stream if available,
+        or creates a new stream if needed.
+
+        Returns:
+            grpclib.client.Stream: An active gRPC stream.
+        """
         async with self.lock:
-            if not self.streams:
-                return await self._create_stream()
+            current_time = asyncio.get_event_loop().time()
 
-            # Try to find a non-expired stream
-            for stream in self.streams:
-                if (asyncio.get_event_loop().time() - stream['created_at']) < self.max_stream_age:
-                    return stream['stream']
+            # Remove expired streams
+            self.streams = [s for s in self.streams if (current_time - s['created_at']) < self.max_stream_age]
 
-            # If all streams are expired, create a new one
+            if self.streams:
+                return self.streams[0]['stream']
+
             return await self._create_stream()
 
     async def _create_stream(self):
+        """
+        Create a new gRPC stream and add it to the pool.
+
+        If the pool size is exceeded after adding the new stream, the oldest stream is removed and closed.
+
+        Returns:
+            grpclib.client.Stream: The newly created gRPC stream.
+        """
         stream = await self._grpc_stub.SubmitSnapshot.open()
         stream_info = {
             'stream': stream,
@@ -179,12 +234,16 @@ class StreamPool:
         }
         self.streams.append(stream_info)
         if len(self.streams) > self.pool_size:
-            oldest_stream = min(self.streams, key=lambda s: s['created_at'])
-            self.streams.remove(oldest_stream)
+            oldest_stream = self.streams.pop(0)
             await oldest_stream['stream'].close()
         return stream
 
     async def close_all(self):
+        """
+        Close all streams in the pool and clear the pool.
+
+        This method should be called when shutting down the StreamPool to ensure all streams are properly closed.
+        """
         for stream_info in self.streams:
             await stream_info['stream'].close()
         self.streams.clear()
@@ -193,12 +252,39 @@ class StreamPool:
 class GenericAsyncWorker(multiprocessing.Process):
     """
     A generic asynchronous worker class for handling various tasks related to snapshot processing and submission.
+
+    This class extends multiprocessing.Process to run as a separate process and handles tasks such as
+    snapshot submission, IPFS uploads, and communication with the collector.
+
+    Attributes:
+        _active_tasks (Set[asyncio.Task]): A set of active asyncio tasks.
+        _core_rmq_consumer (asyncio.Task): The core RabbitMQ consumer task.
+        _exchange_name (str): The name of the RabbitMQ exchange.
+        _unique_id (str): A unique identifier for this worker instance.
+        _running_callback_tasks (Dict[str, asyncio.Task]): A dictionary of running callback tasks.
+        _protocol_state_contract (Contract): The protocol state contract.
+        _qos (int): The quality of service for RabbitMQ consumption.
+        _signer_index (int): The index of the signer to use.
+        _rate_limiting_lua_scripts (Any): Rate limiting Lua scripts.
+        protocol_state_contract_address (str): The address of the protocol state contract.
+        _commit_payload_exchange (str): The name of the commit payload exchange.
+        _event_detector_exchange (str): The name of the event detector exchange.
+        _event_detector_routing_key_prefix (str): The routing key prefix for the event detector.
+        _commit_payload_routing_key (str): The routing key for commit payloads.
+        _keccak_hash (Callable): A function to compute Keccak hash.
+        _private_key (str): The private key for signing transactions.
+        _identity_private_key (PrivateKey): The private key object for signing.
+        _initialized (bool): Whether the worker has been initialized.
+        _task_timeout (int): The timeout for tasks in seconds.
+        _task_cleanup_interval (int): The interval for cleaning up tasks in seconds.
+        stream_manager_task (asyncio.Task): The stream manager task.
     """
+
     _active_tasks: Set[asyncio.Task]
 
     def __init__(self, name, signer_idx, **kwargs):
         """
-        Initializes a GenericAsyncWorker instance.
+        Initialize a GenericAsyncWorker instance.
 
         Args:
             name (str): The name of the worker.
@@ -236,29 +322,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._task_cleanup_interval = 60  # 1 minute
         self.stream_manager_task = None
 
-    async def start_stream_manager(self):
-        self.stream_manager_task = asyncio.create_task(self._manage_streams())
-
-    async def _manage_streams(self):
-        while True:
-            await asyncio.sleep(60)  # Check every minute
-            async with self.stream_pool.lock:
-                current_time = asyncio.get_event_loop().time()
-                for stream_info in self.stream_pool.streams[:]:
-                    if (current_time - stream_info['created_at']) >= self.stream_pool.max_stream_age:
-                        await stream_info['stream'].close()
-                        self.stream_pool.streams.remove(stream_info)
-                        await self.stream_pool._create_stream()
-
-    async def cleanup(self):
-        if self.stream_manager_task:
-            self.stream_manager_task.cancel()
-            try:
-                await self.stream_manager_task
-            except asyncio.CancelledError:
-                pass
-        await self.stream_pool.close_all()
-
     def _signal_handler(self, signum, frame):
         """
         Signal handler function that cancels the core RMQ consumer when a SIGINT, SIGTERM or SIGQUIT signal is received.
@@ -280,6 +343,8 @@ class GenericAsyncWorker(multiprocessing.Process):
         """
         Uploads the given snapshot to web3 storage.
 
+        This method attempts to upload the snapshot to web3 storage, with retries on failure.
+
         Args:
             snapshot (bytes): The snapshot to upload.
 
@@ -287,7 +352,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             None
 
         Raises:
-            HTTPError: If the upload fails.
+            HTTPError: If the upload fails after all retry attempts.
         """
         web3_storage_settings = settings.web3storage
         # If no API token is provided, skip
@@ -312,12 +377,17 @@ class GenericAsyncWorker(multiprocessing.Process):
         """
         Uploads a snapshot to IPFS using the provided AsyncIPFSClient.
 
+        This method attempts to upload the snapshot to IPFS, with retries on failure.
+
         Args:
             snapshot (bytes): The snapshot to upload.
             _ipfs_writer_client (AsyncIPFSClient): The IPFS client to use for uploading.
 
         Returns:
             str: The CID of the uploaded snapshot.
+
+        Raises:
+            IPFSAsyncClientError: If the upload fails after all retry attempts.
         """
         snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
         return snapshot_cid
@@ -325,6 +395,8 @@ class GenericAsyncWorker(multiprocessing.Process):
     async def generate_signature(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
         """
         Generates a signature for the snapshot submission request.
+
+        This method creates an EIP712 structured request and signs it with the provided or default private key.
 
         Args:
             snapshot_cid (str): The CID of the snapshot.
@@ -385,11 +457,15 @@ class GenericAsyncWorker(multiprocessing.Process):
         Commits the given snapshot to IPFS and web3 storage (if enabled), and sends messages to the event detector and relayer
         dispatch queues.
 
+        This method handles the entire process of committing a snapshot, including uploading to IPFS,
+        sending notifications, and updating Redis state.
+
         Args:
             task_type (str): The type of task being committed.
             _ipfs_writer_client (AsyncIPFSClient): The IPFS client to use for uploading the snapshot.
             project_id (str): The ID of the project the snapshot belongs to.
-            epoch (Union[PowerloomSnapshotProcessMessage, PowerloomSnapshotSubmittedMessage, PowerloomCalculateAggregateMessage]): The epoch the snapshot belongs to.
+            epoch (Union[PowerloomSnapshotProcessMessage, PowerloomSnapshotSubmittedMessage, PowerloomCalculateAggregateMessage]):
+                The epoch the snapshot belongs to.
             snapshot (Union[BaseModel, AggregateBase]): The snapshot to commit.
             storage_flag (bool): Whether to upload the snapshot to web3 storage.
 
@@ -460,7 +536,8 @@ class GenericAsyncWorker(multiprocessing.Process):
 
             except Exception as e:
                 self._logger.opt(exception=True).error(
-                    'Exception sending snapshot submitted message to event detector queue: {} | Project: {} | Epoch: {} | Snapshot CID: {}',
+                    'Exception sending snapshot submitted message to event detector queue: {} | '
+                    'Project: {} | Epoch: {} | Snapshot CID: {}',
                     e, project_id, epoch.epochId, snapshot_cid,
                 )
 
@@ -511,6 +588,8 @@ class GenericAsyncWorker(multiprocessing.Process):
         """
         Consume messages from a RabbitMQ queue.
 
+        This method sets up the RabbitMQ connection, channel, and starts consuming messages from the specified queue.
+
         Args:
             loop (asyncio.AbstractEventLoop): The event loop to use for the consumer.
 
@@ -541,6 +620,8 @@ class GenericAsyncWorker(multiprocessing.Process):
         """
         Callback function that is called when a message is received from RabbitMQ.
 
+        This method should be overridden in subclasses to implement specific message handling logic.
+
         Args:
             message (IncomingMessage): The incoming message from RabbitMQ.
         """
@@ -562,6 +643,11 @@ class GenericAsyncWorker(multiprocessing.Process):
     async def _get_chain_id(self):
         """
         Gets the chain ID for the worker.
+
+        This method attempts to retrieve the chain ID, with retries on failure.
+
+        Returns:
+            int: The chain ID.
         """
         self._chain_id = await self._w3.eth.chain_id
         self._logger.debug('Set anchor chain ID to {}', self._chain_id)
@@ -570,6 +656,9 @@ class GenericAsyncWorker(multiprocessing.Process):
     async def _init_rpc_helper(self):
         """
         Initializes the RpcHelper objects for the worker and anchor chain, and sets up the protocol state contract.
+
+        This method initializes RPC helpers for both the main chain and the anchor chain, sets up the protocol state contract,
+        and initializes the Web3 instance and domain separator.
         """
         self._rpc_helper = RpcHelper(rpc_settings=settings.rpc)
         await self._rpc_helper.init(redis_conn=self._redis_conn)
@@ -597,6 +686,8 @@ class GenericAsyncWorker(multiprocessing.Process):
     async def _init_httpx_client(self):
         """
         Initializes the HTTPX client and transport objects for making HTTP requests.
+
+        This method sets up two HTTPX clients: one for general use and another specifically for web3 storage uploads.
         """
         self._async_transport = AsyncHTTPTransport(
             limits=Limits(
@@ -624,37 +715,88 @@ class GenericAsyncWorker(multiprocessing.Process):
             headers={'Authorization': 'Bearer ' + settings.web3storage.api_token},
         )
 
-    @asynccontextmanager
-    async def open_stream(self):
+    async def _init_grpc(self):
         """
-        Context manager for opening a gRPC stream.
+        Initializes the gRPC channel and stub for communication with the collector.
 
-        Yields:
-            The opened stream.
+        This method sets up a gRPC channel to communicate with the local collector service,
+        creates a submission stub, and initializes a stream pool for efficient message handling.
         """
-        try:
-            async with self._grpc_stub.SubmitSnapshot.open() as stream:
-                self._stream = stream
-                yield self._stream
-        finally:
-            self._stream = None
+        # Create a gRPC channel to the local collector service
+        self._grpc_channel = Channel(
+            host='host.docker.internal',
+            port=settings.local_collector_port,
+            ssl=False,
+        )
+        # Initialize the submission stub for making gRPC calls
+        self._grpc_stub = SubmissionStub(self._grpc_channel)
+        # Create a pool of streams for efficient message handling
+        self.stream_pool = StreamPool(self._grpc_stub)
 
-    async def _cancel_stream(self):
+    async def send_message(self, msg, simulation=False):
         """
-        Cancels the current gRPC stream if it exists.
+        Sends a message to the collector, either as a simulation or a real submission.
+
+        This method attempts to send a message to the collector service, with retry logic
+        in case of failures. It handles both simulation and real submission scenarios.
+
+        Args:
+            msg (SnapshotSubmission): The message to send.
+            simulation (bool, optional): Whether this is a simulation. Defaults to False.
+
+        Raises:
+            Exception: If failed to send the message after retries.
         """
-        # TODO: check if this is needed
-        if self._stream is not None:
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                await self._stream.cancel()
-            except:
-                self._logger.debug('Error cancelling stream, continuing...')
-            self._logger.debug('Stream cancelled due to inactivity.')
-            self._stream = None
+                if simulation:
+                    # Handle simulation submission
+                    async with self._grpc_stub.SubmitSnapshotSimulation.open() as stream:
+                        await stream.send_message(msg)
+                        self._logger.debug(f'Sent simulation message: {msg}')
+
+                        response = await stream.recv_message()
+                        await stream.end()
+
+                        if response and 'Success' in response.message:
+                            self._logger.info('✅ Simulation snapshot submitted successfully: {}!', msg)
+                            return {'status_code': 200}
+                        else:
+                            raise Exception(f'Failed to send simulation snapshot, got response: {response}')
+                else:
+                    # Handle real submission
+                    stream = await self.stream_pool.get_stream()
+                    await stream.send_message(msg)
+                    self._logger.debug(f'Sent message: {msg}')
+                    return {'status_code': 200}
+            except StreamTerminatedError as e:
+                self._logger.warning(f'Stream terminated while sending message. Retrying... Error: {e}')
+                if attempt == max_retries - 1:
+                    raise Exception(f'Failed to send message after {max_retries} attempts: {e}')
+            except GRPCError as e:
+                if e.status == Status.UNAVAILABLE:
+                    self._logger.warning(f'gRPC service unavailable. Retrying... Error: {e}')
+                    await asyncio.sleep(1 * (attempt + 1))  # Exponential backoff
+                else:
+                    raise Exception(f'gRPC error: {e}')
+            except Exception as e:
+                self._logger.error(f'Failed to send message: {e}')
+                raise Exception(f'Failed to send message: {e}')
+
+    async def cleanup(self):
+        """
+        Cleans up resources by closing all streams in the pool and the gRPC channel.
+        """
+        await self.stream_pool.close_all()
+        await self._grpc_channel.close()
 
     async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
         """
         Sends a snapshot submission to the collector.
+
+        This method prepares a snapshot submission message, signs it, and sends it to the collector.
+        It handles both simulation (epoch_id = 0) and real submissions.
 
         Args:
             snapshot_cid (str): The CID of the snapshot.
@@ -666,11 +808,12 @@ class GenericAsyncWorker(multiprocessing.Process):
         Raises:
             Exception: If failed to send the message.
         """
-        self._logger.debug(
-            'Sending submission to collector...',
-        )
+        self._logger.debug('Sending submission to collector...')
+
+        # Generate signature for the submission
         request_, signature, current_block_hash = await self.generate_signature(snapshot_cid, epoch_id, project_id, slot_id, private_key)
 
+        # Prepare the request message
         request_msg = Request(
             slotId=request_['slotId'],
             deadline=request_['deadline'],
@@ -678,151 +821,76 @@ class GenericAsyncWorker(multiprocessing.Process):
             epochId=request_['epochId'],
             projectId=request_['projectId'],
         )
-        self._logger.debug(
-            'Snapshot submission creation with request: {}', request_msg,
-        )
+        self._logger.debug('Snapshot submission creation with request: {}', request_msg)
 
+        # Create the final submission message
         msg = SnapshotSubmission(request=request_msg, signature=signature.hex(), header=current_block_hash)
-        self._logger.debug(
-            'Snapshot submission created: {}', msg,
-        )
+        self._logger.debug('Snapshot submission created: {}', msg)
 
         try:
+            # Send the message, handling simulation case separately
             if epoch_id == 0:
                 await self.send_message(msg, simulation=True)
             else:
                 await self.send_message(msg)
         except Exception as e:
-            self._logger.opt(
-                exception=True,
-            ).error(f'Failed to send message: {e}')
+            self._logger.opt(exception=True).error(f'Failed to send message: {e}')
             raise Exception(f'Failed to send message: {e}')
-
-    @retry(
-        wait=wait_random_exponential(multiplier=1, max=10),
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception_type(Exception),
-    )
-    async def send_message(self, msg, simulation=False):
-        """
-        Sends a message to the collector, either as a simulation or a real submission.
-
-        Args:
-            msg (SnapshotSubmission): The message to send.
-            simulation (bool, optional): Whether this is a simulation. Defaults to False.
-
-        Raises:
-            Exception: If failed to send the message.
-        """
-        if simulation:
-            async with self._grpc_stub.SubmitSnapshotSimulation.open() as stream:
-                try:
-                    await stream.send_message(msg)
-                    self._logger.debug(f'Sent simulation message: {msg}')
-
-                    response = await stream.recv_message()
-                    await stream.end()
-
-                    if response and 'Success' in response.message:
-                        self._logger.info(
-                            '✅ Simulation snapshot submitted successfully: {}!', msg,
-                        )
-                    else:
-                        raise Exception(
-                            f'Failed to send simulation snapshot, got response: {response} | type: {type(response)}',
-                        )
-                except:
-                    raise Exception(f'Failed to send simulation snapshot: {msg}')
-        else:
-            # try:
-            #     async with self.open_stream() as stream:
-            #         await stream.send_message(msg)
-            #         self._logger.debug(f'Sent message: {msg}')
-            #         return {'status_code': 200}
-            # except Exception as e:
-            #     raise Exception(f'Failed to send message: {e}')
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    stream = await self.stream_pool.get_stream()
-                    await stream.send_message(msg)
-                    self._logger.debug(f'Sent message: {msg}')
-                    return {'status_code': 200}
-                except StreamTerminatedError as e:
-                    self._logger.warning(f'Stream terminated while sending message. Retrying... Error: {e}')
-                    if attempt == max_retries - 1:
-                        raise Exception(f'Failed to send message after {max_retries} attempts: {e}')
-                except Exception as e:
-                    self._logger.error(f'Failed to send message: {e}')
-                    raise Exception(f'Failed to send message: {e}')
-
-    async def _init_grpc(self):
-        """
-        Initializes the gRPC channel and stub for communication with the collector.
-        """
-        self._grpc_channel = Channel(
-            host='host.docker.internal',
-            port=settings.local_collector_port,
-            ssl=False,
-        )
-        self._grpc_stub = SubmissionStub(self._grpc_channel)
-        self.stream_pool = StreamPool(self._grpc_stub)
-        self._stream = None
-        self._cancel_task = None
 
     async def _init_protocol_meta(self):
         """
         Initializes protocol metadata including source chain block time, epoch size, and snapshot submission window.
+
+        This method queries the blockchain for various protocol-specific parameters and sets them as instance variables.
+        It handles exceptions for each query separately to ensure partial initialization in case of failures.
         """
-        # TODO: combine these into a single call
+        # TODO: combine these into a single call for efficiency
         self._protocol_abi = read_json_file(settings.protocol_state.abi)
+
+        # Query and set source chain block time
         try:
             source_block_time = await self._anchor_rpc_helper.web3_call(
                 tasks=[('SOURCE_CHAIN_BLOCK_TIME', [Web3.to_checksum_address(settings.data_market)])],
                 contract_addr=self.protocol_state_contract_address,
                 abi=self._protocol_abi,
             )
-        except Exception as e:
-            self._logger.exception(
-                'Exception in querying protocol state for source chain block time: {}',
-                e,
-            )
-        else:
             source_block_time = source_block_time[0]
             self._source_chain_block_time = source_block_time / 10 ** 4
             self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
+        except Exception as e:
+            self._logger.exception('Exception in querying protocol state for source chain block time: {}', e)
+
+        # Query and set epoch size
         try:
             epoch_size = await self._anchor_rpc_helper.web3_call(
                 tasks=[('EPOCH_SIZE', [Web3.to_checksum_address(settings.data_market)])],
                 contract_addr=self.protocol_state_contract_address,
                 abi=self._protocol_abi,
             )
-        except Exception as e:
-            self._logger.exception(
-                'Exception in querying protocol state for epoch size: {}',
-                e,
-            )
-        else:
             self._epoch_size = epoch_size[0]
             self._logger.debug('Set epoch size to {}', self._epoch_size)
+        except Exception as e:
+            self._logger.exception('Exception in querying protocol state for epoch size: {}', e)
+
+        # Query and set submission window
         try:
             submission_window = await get_snapshot_submision_window(
                 redis_conn=self._redis_conn,
                 rpc_helper=self._anchor_rpc_helper,
                 state_contract_obj=self._protocol_state_contract,
             )
-        except Exception as e:
-            self._logger.exception(
-                'Exception in querying protocol state for snapshot submission window: {}',
-                e,
-            )
-        else:
             self._submission_window = submission_window
             self._logger.debug('Set snapshot submission window to {}', self._submission_window)
+        except Exception as e:
+            self._logger.exception('Exception in querying protocol state for snapshot submission window: {}', e)
 
     async def init(self):
         """
-        Initializes the worker by initializing the Redis pool, HTTPX client, and RPC helper.
+        Initializes the worker by setting up all necessary components.
+
+        This method initializes the Redis pool, HTTPX client, RPC helper, protocol metadata,
+        gRPC connection, and starts the task cleanup process. It ensures that initialization
+        happens only once.
         """
         if not self._initialized:
             await self._init_redis_pool()
@@ -836,24 +904,28 @@ class GenericAsyncWorker(multiprocessing.Process):
 
     def run(self) -> None:
         """
-        Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
-        running the event loop until it is stopped.
+        Runs the worker by setting up the environment and starting the main event loop.
+
+        This method sets resource limits, registers signal handlers, starts the RabbitMQ consumer,
+        and runs the event loop until it is stopped.
         """
         self._logger = logger.bind(module=self.name)
+
+        # Set resource limits
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,
             (settings.rlimit.file_descriptors, hard),
         )
+
+        # Register signal handlers
         for signame in [SIGINT, SIGTERM, SIGQUIT]:
             signal(signame, self._signal_handler)
+
+        # Set up and run the event loop
         ev_loop = asyncio.get_event_loop()
-        self._logger.debug(
-            f'Starting asynchronous callback worker {self._unique_id}...',
-        )
-        self._core_rmq_consumer = asyncio.ensure_future(
-            self._rabbitmq_consumer(ev_loop),
-        )
+        self._logger.debug(f'Starting asynchronous callback worker {self._unique_id}...')
+        self._core_rmq_consumer = asyncio.ensure_future(self._rabbitmq_consumer(ev_loop))
         try:
             ev_loop.run_forever()
         finally:
@@ -862,6 +934,9 @@ class GenericAsyncWorker(multiprocessing.Process):
     async def _cleanup_tasks(self):
         """
         Periodically clean up completed or timed-out tasks.
+
+        This method runs in an infinite loop, periodically checking all active tasks
+        and removing those that are completed or have timed out.
         """
         while True:
             await asyncio.sleep(self._task_cleanup_interval)
