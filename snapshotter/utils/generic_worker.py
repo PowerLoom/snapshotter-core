@@ -775,9 +775,10 @@ class GenericAsyncWorker(multiprocessing.Process):
                 else:
                     # Handle real submission
                     stream = await self.stream_pool.get_stream()
-                    await stream.send_message(msg)
-                    self._logger.debug(f'Sent message: {msg}')
-                    return {'status_code': 200}
+                    async with stream:
+                        await stream.send_message(msg)
+                        self._logger.debug(f'Sent message: {msg}')
+                        return {'status_code': 200}
             except StreamTerminatedError as e:
                 self._logger.warning(f'Stream terminated while sending message. Retrying... Error: {e}')
                 if attempt == max_retries - 1:
