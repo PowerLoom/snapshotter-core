@@ -14,6 +14,7 @@ from typing import Union
 from uuid import uuid4
 
 import httpx
+import sha3
 import tenacity
 from aio_pika import IncomingMessage
 from aio_pika import Message
