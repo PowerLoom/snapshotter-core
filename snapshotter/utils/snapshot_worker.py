@@ -184,6 +184,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             await p.execute()
 
             # Commit payload asynchronously
+            current_time = time.time()
             task = asyncio.create_task(
                 self._commit_payload(
                     task_type=task_type,
@@ -194,8 +195,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     storage_flag=settings.web3storage.upload_snapshots,
                 ),
             )
-            self._active_tasks.add(task)
-            task.add_done_callback(lambda _: self._active_tasks.discard(task))
+            self._active_tasks.add((current_time, task))
+            task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def _process_bulk_mode(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """

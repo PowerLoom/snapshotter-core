@@ -771,15 +771,14 @@ class GenericAsyncWorker(multiprocessing.Process):
         """
         while True:
             await asyncio.sleep(self._task_cleanup_interval)
-            current_time = time.time()
-            for task in list(self._active_tasks):
-                task_start_time = task.get_coro().cr_frame.f_locals.get('start_time', 0)
+            for task_start_time, task in list(self._active_tasks):
+                current_time = time.time()
                 if task.done():
-                    self._active_tasks.discard(task)
+                    self._active_tasks.discard((task_start_time, task))
 
                 elif current_time - task_start_time > self._task_timeout:
                     self._logger.warning(
                         f'Task {task} timed out. Cancelling..., current_time: {current_time}, start_time: {task_start_time}',
                     )
                     task.cancel()
-                    self._active_tasks.discard(task)
+                    self._active_tasks.discard((task_start_time, task))

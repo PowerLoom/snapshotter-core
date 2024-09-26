@@ -337,9 +337,10 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 'Unknown task type {}', task_type,
             )
             return
+        current_time = time.time()
         task = asyncio.create_task(self._processor_task(msg_obj=msg_obj, task_type=task_type))
-        self._active_tasks.add(task)
-        task.add_done_callback(lambda _: self._active_tasks.discard(task))
+        self._active_tasks.add((current_time, task))
+        task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def _init_project_calculation_mapping(self):
         """
