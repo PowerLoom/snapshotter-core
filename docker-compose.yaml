@@ -105,7 +105,7 @@ services:
       - ipfs_data:/data/ipfs
     ports:
       - "4001:4001"  # Swarm listening port
-      - "5002:5001"  # API server
+      - "5001:5001"  # API server
       - "8080:8080"  # Gateway
     healthcheck:
       test: ["CMD", "ipfs", "id"]
