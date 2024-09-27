@@ -460,8 +460,15 @@ class RpcHelper(object):
                 response = await asyncio.gather(*web3_tasks)
                 return response
             except Exception as e:
+                # Create a serializable version of the tasks
+                serializable_tasks = [
+                    {
+                        "function_name": task[0],
+                        "args": task[1]
+                    } for task in tasks
+                ]
                 exc = RPCException(
-                    request=tasks,
+                    request=serializable_tasks,
                     response=None,
                     underlying_exception=e,
                     extra_info={'msg': str(e)},

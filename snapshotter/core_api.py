@@ -200,33 +200,21 @@ async def get_project_last_finalized_epoch_info(
 
     try:
         # Find the last finalized epoch from the contract
-        epoch_finalized = False
-        [cur_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
-            [request.app.state.protocol_state_contract.functions.currentEpoch(Web3.to_checksum_address(settings.data_market))],
+        [project_last_finalized_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
+            tasks=[
+                ('lastFinalizedSnapshot', [Web3.to_checksum_address(settings.data_market), project_id]),
+            ],
+            contract_addr=protocol_state_contract_address,
+            abi=protocol_state_contract_abi,
         )
-        epoch_id = int(cur_epoch[2])
-        
-        # Iterate backwards through epochs until a finalized one is found
-        while not epoch_finalized and epoch_id >= 0:
-            # Get finalization status
-            [epoch_finalized_contract] = await request.app.state.anchor_rpc_helper.web3_call(
-                [request.app.state.protocol_state_contract.functions.snapshotStatus(settings.data_market, project_id, epoch_id)],
-            )
-            if epoch_finalized_contract[0]:
-                epoch_finalized = True
-                project_last_finalized_epoch = epoch_id
-            else:
-                epoch_id -= 1
-                if epoch_id < 0:
-                    response.status_code = 404
-                    return {
-                        'status': 'error',
-                        'message': f'Unable to find last finalized epoch for project {project_id}',
-                    }
         
         # Get epoch info for the last finalized epoch
         [epoch_info_data] = await request.app.state.anchor_rpc_helper.web3_call(
-            [request.app.state.protocol_state_contract.functions.epochInfo(Web3.to_checksum_address(settings.data_market), project_last_finalized_epoch)],
+            tasks=[
+                ('epochInfo', [Web3.to_checksum_address(settings.data_market), project_last_finalized_epoch]),
+            ],
+            contract_addr=protocol_state_contract_address,
+            abi=protocol_state_contract_abi,
         )
         epoch_info = {
             'epochId': project_last_finalized_epoch,
