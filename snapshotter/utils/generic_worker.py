@@ -621,8 +621,8 @@ class GenericAsyncWorker(multiprocessing.Process):
             else:
                 await asyncio.wait_for(self.send_message(msg), timeout=60)
         except asyncio.TimeoutError:
-            self._logger.error(f'Timeout while sending message: {msg}')
-            raise Exception(f'Timeout while sending message: {msg}')
+            self._logger.error('Timeout waiting for response, assuming success')
+            return
         except Exception as e:
             self._logger.opt(
                 exception=True,
@@ -646,12 +646,13 @@ class GenericAsyncWorker(multiprocessing.Process):
             Exception: If failed to send the message.
         """
         if simulation:
-            # For simulations, we'll still use a separate stream each time
             async with self._grpc_stub.SubmitSnapshotSimulation.open() as stream:
                 try:
                     await stream.send_message(msg)
                     self._logger.debug(f'Sent simulation message: {msg}')
+
                     response = await stream.recv_message()
+                    await stream.end()
 
                     if response and 'Success' in response.message:
                         self._logger.info(
@@ -661,23 +662,15 @@ class GenericAsyncWorker(multiprocessing.Process):
                         raise Exception(
                             f'Failed to send simulation snapshot, got response: {response} | type: {type(response)}',
                         )
-                except Exception as e:
-                    raise Exception(f'Failed to send simulation snapshot: {e}')
+                except:
+                    raise Exception(f'Failed to send simulation snapshot: {msg}')
         else:
             try:
-                stream = await self.open_stream()
-                await asyncio.wait_for(stream.send_message(msg), timeout=60.0)
-                self._logger.debug(f'Sent message: {msg}')
-                # We don't wait for a response in non-simulation mode
-                self._logger.info('Message sent successfully')
-                return {'status_code': 200}
-            except asyncio.TimeoutError:
-                self._logger.warning('Timeout occurred while sending message, assuming it went through')
-                await self.close_stream()  # Close and reset the stream on timeout
-                return {'status_code': 200}  # Assume success even on timeout
+                async with self.open_stream() as stream:
+                    await stream.send_message(msg)
+                    self._logger.debug(f'Sent message: {msg}')
+                    return {'status_code': 200}
             except Exception as e:
-                self._logger.error(f'Failed to send message: {e}')
-                await self.close_stream()  # Close and reset the stream on error
                 raise Exception(f'Failed to send message: {e}')
 
     async def _init_grpc(self):
