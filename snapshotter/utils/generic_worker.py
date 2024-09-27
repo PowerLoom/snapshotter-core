@@ -241,6 +241,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         stop=stop_after_attempt(5),
         retry=tenacity.retry_if_not_exception_type(IPFSAsyncClientError),
         after=ipfs_upload_retry_state_callback,
+        reraise=True,
     )
     async def _upload_to_ipfs(self, snapshot: bytes, _ipfs_writer_client: AsyncIPFSClient):
         """
