@@ -5,6 +5,7 @@ import resource
 import time
 from datetime import datetime
 from functools import partial
+from typing import Set
 
 import uvloop
 from aio_pika import Message
@@ -68,6 +69,10 @@ class HealthManager(multiprocessing.Process):
         self._initialized = False
         self._last_epoch_processing_health_check = 0
         self._last_epoch_checked = 0
+        # Task tracking
+        self._active_tasks: Set[asyncio.Task] = set()
+        self._task_timeout = settings.async_task_config.task_timeout
+        self._task_cleanup_interval = settings.async_task_config.task_cleanup_interval
 
     async def _init_redis_pool(self):
         """
@@ -150,6 +155,7 @@ class HealthManager(multiprocessing.Process):
             await self._init_redis_pool()
             await self._init_httpx_client()
             await self._init_rabbitmq_connection()
+            asyncio.create_task(self._cleanup_tasks())
             self._initialized = True
 
     async def _get_proc_hub_start_time(self) -> int:
@@ -183,7 +189,7 @@ class HealthManager(multiprocessing.Process):
         # Only start if 5 minutes have passed since proc hub core start time
         if int(time.time()) - start_time < 5 * 60:
             self._logger.info(
-                'Skipping epoch processing health check because 5 minutes have not passed since proc hub core start time'
+                'Skipping epoch processing health check because 5 minutes have not passed since proc hub core start time',
             )
             return
 
@@ -192,10 +198,12 @@ class HealthManager(multiprocessing.Process):
             return
 
         # Only run once every minute
-        if (self._last_epoch_processing_health_check != 0 and 
-            int(time.time()) - self._last_epoch_processing_health_check < 60):
+        if (
+            self._last_epoch_processing_health_check != 0 and
+            int(time.time()) - self._last_epoch_processing_health_check < 60
+        ):
             self._logger.debug(
-                'Skipping epoch processing health check because it was run less than a minute ago'
+                'Skipping epoch processing health check because it was run less than a minute ago',
             )
             return
 
@@ -214,13 +222,13 @@ class HealthManager(multiprocessing.Process):
         # Handle first run or no new epoch detected
         if self._last_epoch_checked == 0:
             self._logger.info(
-                'Skipping epoch processing health check because this is the first run with no reference of last epoch checked by this service'
+                'Skipping epoch processing health check because this is the first run with no reference of last epoch checked by this service',
             )
             self._last_epoch_checked = current_epoch_id
             return
         elif current_epoch_id == self._last_epoch_checked:
             self._logger.info(
-                'Skipping epoch processing health check because no new epoch was detected since last check. Probably Prost network is not producing new blocks'
+                'Skipping epoch processing health check because no new epoch was detected since last check. Probably Prost network is not producing new blocks',
             )
             await send_failure_notifications_async(
                 client=self._client,
@@ -234,8 +242,8 @@ class HealthManager(multiprocessing.Process):
                         {
                             'last_epoch_checked': self._last_epoch_checked,
                             'current_epoch_id': current_epoch_id,
-                            'reason': 'No new epoch detected since last check. Probably Prost network is not producing new blocks'
-                        }
+                            'reason': 'No new epoch detected since last check. Probably Prost network is not producing new blocks',
+                        },
                     ),
                 ),
             )
@@ -244,7 +252,7 @@ class HealthManager(multiprocessing.Process):
         # Check if no epoch is detected for 5 minutes
         if last_epoch_detected and int(time.time()) - last_epoch_detected > 5 * 60:
             self._logger.debug(
-                'Sending unhealthy epoch report to reporting service due to no epoch detected for ~30 epochs'
+                'Sending unhealthy epoch report to reporting service due to no epoch detected for ~30 epochs',
             )
             await send_failure_notifications_async(
                 client=self._client,
@@ -257,22 +265,24 @@ class HealthManager(multiprocessing.Process):
                     extra=json.dumps(
                         {
                             'last_epoch_detected': last_epoch_detected,
-                        }
+                        },
                     ),
                 ),
             )
             self._logger.info(
-                'Sending respawn command for all process hub core children because no epoch was detected for ~30 epochs'
+                'Sending respawn command for all process hub core children because no epoch was detected for ~30 epochs',
             )
             await self._send_proc_hub_respawn()
             self._last_epoch_checked = current_epoch_id
             return
 
         # Check if time difference between last epoch detected and last snapshot processed is too large
-        if (last_epoch_detected and last_snapshot_processed and 
-            last_epoch_detected - last_snapshot_processed > 5 * 60):
+        if (
+            last_epoch_detected and last_snapshot_processed and
+            last_epoch_detected - last_snapshot_processed > 5 * 60
+        ):
             self._logger.debug(
-                'Sending unhealthy epoch report to reporting service due to no snapshot processing for ~30 epochs'
+                'Sending unhealthy epoch report to reporting service due to no snapshot processing for ~30 epochs',
             )
             await send_failure_notifications_async(
                 client=self._client,
@@ -286,12 +296,12 @@ class HealthManager(multiprocessing.Process):
                         {
                             'last_epoch_detected': last_epoch_detected,
                             'last_snapshot_processed': last_snapshot_processed,
-                        }
+                        },
                     ),
                 ),
             )
             self._logger.info(
-                'Sending respawn command for all process hub core children because no snapshot processing was done for ~30 epochs'
+                'Sending respawn command for all process hub core children because no snapshot processing was done for ~30 epochs',
             )
             await self._send_proc_hub_respawn()
             self._last_epoch_checked = current_epoch_id
@@ -352,7 +362,7 @@ class HealthManager(multiprocessing.Process):
                         extra=json.dumps(
                             {
                                 'epoch_health': epoch_health,
-                            }
+                            },
                         ),
                     ),
                 )
@@ -381,7 +391,28 @@ class HealthManager(multiprocessing.Process):
             last_detected_epoch = await self._redis_conn.get(last_epoch_detected_epoch_id_key())
             if last_detected_epoch:
                 last_detected_epoch = int(last_detected_epoch)
-                asyncio.ensure_future(self._epoch_processing_health_check(last_detected_epoch))
+                current_time = time.time()
+                task = asyncio.create_task(self._epoch_processing_health_check(last_detected_epoch))
+                self._active_tasks.add((current_time, task))
+                task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
+
+    async def _cleanup_tasks(self):
+        """
+        Periodically clean up completed or timed-out tasks.
+        """
+        while True:
+            await asyncio.sleep(self._task_cleanup_interval)
+            for task_start_time, task in list(self._active_tasks):
+                current_time = time.time()
+                if task.done():
+                    self._active_tasks.discard((task_start_time, task))
+
+                elif current_time - task_start_time > self._task_timeout:
+                    self._logger.warning(
+                        f'Task {task} timed out. Cancelling..., current_time: {current_time}, start_time: {task_start_time}',
+                    )
+                    task.cancel()
+                    self._active_tasks.discard((task_start_time, task))
 
     def run(self) -> None:
         """

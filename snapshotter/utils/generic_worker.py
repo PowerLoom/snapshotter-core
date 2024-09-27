@@ -190,8 +190,8 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._initialized = False
         # Task tracking
         self._active_tasks: Set[asyncio.Task] = set()
-        self._task_timeout = 300  # 5 minutes
-        self._task_cleanup_interval = 60  # 1 minute
+        self._task_timeout = settings.async_task_config.task_timeout
+        self._task_cleanup_interval = settings.async_task_config.task_cleanup_interval
 
     def _signal_handler(self, signum, frame):
         """
@@ -439,7 +439,12 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         # Upload to web3 storage
         if storage_flag:
-            asyncio.ensure_future(self._upload_web3_storage(snapshot_bytes))
+            current_time = time.time()
+            task = asyncio.create_task(
+                self._upload_web3_storage(snapshot_bytes),
+            )
+            self._active_tasks.add((current_time, task))
+            task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def _rabbitmq_consumer(self, loop):
         """

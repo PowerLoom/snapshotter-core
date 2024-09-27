@@ -243,6 +243,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                         ).json(),
                     },
                 )
+                current_time = time.time()
                 commit_task = asyncio.create_task(
                     self._commit_payload(
                         task_type=task_type,
@@ -253,8 +254,8 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                         _ipfs_writer_client=self._ipfs_writer_client,
                     ),
                 )
-                self._active_tasks.add(commit_task)
-                commit_task.add_done_callback(lambda _: self._active_tasks.discard(commit_task))
+                self._active_tasks.add((current_time, commit_task))
+                commit_task.add_done_callback(lambda _: self._active_tasks.discard((current_time, commit_task)))
             self._logger.debug(
                 'Updated epoch processing status in aggregation worker for project {} for transition {}',
                 project_id, SnapshotterStates.SNAPSHOT_BUILD.value,

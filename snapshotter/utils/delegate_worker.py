@@ -213,7 +213,10 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             )
             return
         # Start processing the task asynchronously
-        asyncio.ensure_future(self._processor_task(msg_obj=msg_obj))
+        current_time = time.time()
+        task = asyncio.create_task(self._processor_task(msg_obj=msg_obj))
+        self._active_tasks.add((current_time, task))
+        task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def init_worker(self):
         """

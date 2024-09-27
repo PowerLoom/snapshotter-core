@@ -159,6 +159,10 @@ class ProcessorDistributor(multiprocessing.Process):
         self._last_epoch_processing_health_check = 0
         self._preloader_compute_mapping = dict()
         self._snapshot_build_awaited_project_ids = dict()
+        # Task tracking
+        self._active_tasks: Set[asyncio.Task] = set()
+        self._task_timeout = settings.async_task_config.task_timeout
+        self._task_cleanup_interval = settings.async_task_config.task_cleanup_interval
 
     def _signal_handler(self, signum, frame):
         """
@@ -346,7 +350,9 @@ class ProcessorDistributor(multiprocessing.Process):
             await self._init_preloader_compute_mapping()
             self._logger.debug('Initialized preloader compute mapping in Processor Distributor init_worker')
             await self._init_protocol_meta()
-            self._initialized = True
+            asyncio.create_task(self._cleanup_tasks())
+
+        self._initialized = True
 
     async def _get_proc_hub_start_time(self) -> int:
         """
@@ -426,15 +432,13 @@ class ProcessorDistributor(multiprocessing.Process):
                     'Preloading dependency satisfied for project type {} epoch {}. Distributing snapshot build tasks...',
                     project_type, epoch.epochId,
                 )
-                asyncio.ensure_future(
-                    self._redis_conn.hset(
-                        name=epoch_id_project_to_state_mapping(epoch.epochId, SnapshotterStates.PRELOAD.value),
-                        mapping={
-                            project_type: SnapshotterStateUpdate(
-                                status='success', timestamp=int(time.time()),
-                            ).json(),
-                        },
-                    ),
+                await self._redis_conn.hset(
+                    name=epoch_id_project_to_state_mapping(epoch.epochId, SnapshotterStates.PRELOAD.value),
+                    mapping={
+                        project_type: SnapshotterStateUpdate(
+                            status='success', timestamp=int(time.time()),
+                        ).json(),
+                    },
                 )
                 await self._distribute_callbacks_snapshotting(project_type, epoch)
             else:
@@ -442,15 +446,13 @@ class ProcessorDistributor(multiprocessing.Process):
                     'Preloading dependency not satisfied for project type {} epoch {}. Not distributing snapshot build tasks...',
                     project_type, epoch.epochId,
                 )
-                asyncio.ensure_future(
-                    self._redis_conn.hset(
-                        name=epoch_id_project_to_state_mapping(epoch.epochId, SnapshotterStates.PRELOAD.value),
-                        mapping={
-                            project_type: SnapshotterStateUpdate(
-                                status='failed', timestamp=int(time.time()),
-                            ).json(),
-                        },
-                    ),
+                await self._redis_conn.hset(
+                    name=epoch_id_project_to_state_mapping(epoch.epochId, SnapshotterStates.PRELOAD.value),
+                    mapping={
+                        project_type: SnapshotterStateUpdate(
+                            status='failed', timestamp=int(time.time()),
+                        ).json(),
+                    },
                 )
         # TODO: set separate overall status for failed and successful preloads
         if epoch.epochId in self._preload_completion_conditions:
@@ -496,18 +498,24 @@ class ProcessorDistributor(multiprocessing.Process):
         for project_type, project_config in self._project_type_config_mapping.items():
             if not project_config.preload_tasks:
                 # Release for snapshotting
-                asyncio.ensure_future(
+                current_time = time.time()
+                task = asyncio.create_task(
                     self._distribute_callbacks_snapshotting(
                         project_type, msg_obj,
                     ),
                 )
+                self._active_tasks.add((current_time, task))
+                task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
                 continue
 
-        asyncio.ensure_future(
+        current_time = time.time()
+        preloader_task = asyncio.create_task(
             self._preloader_waiter(
                 epoch=msg_obj,
             ),
         )
+        self._active_tasks.add((current_time, preloader_task))
+        preloader_task.add_done_callback(lambda _: self._active_tasks.discard((current_time, preloader_task)))
 
     async def _epoch_release_processor(self, message: IncomingMessage):
         """
@@ -536,7 +544,12 @@ class ProcessorDistributor(multiprocessing.Process):
         )
         self._logger.debug('Newly added projects for epoch {}: {}', msg_obj.epochId, self._newly_added_projects)
         self._logger.debug('Pushing epoch release to preloader coroutine: {}', msg_obj)
-        asyncio.ensure_future(self._exec_preloaders(msg_obj=msg_obj))
+        current_time = time.time()
+        task = asyncio.create_task(
+            self._exec_preloaders(msg_obj=msg_obj),
+        )
+        self._active_tasks.add((current_time, task))
+        task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def _distribute_callbacks_snapshotting(self, project_type: str, epoch: EpochBase):
         """
@@ -912,7 +925,12 @@ class ProcessorDistributor(multiprocessing.Process):
                     epoch_id_epoch_released_key(epoch_msg.epochId),
                     int(time.time()),
                 )
-                asyncio.ensure_future(self._cleanup_older_epoch_status(epoch_msg.epochId))
+                current_time = time.time()
+                task = asyncio.create_task(
+                    self._cleanup_older_epoch_status(epoch_msg.epochId),
+                )
+                self._active_tasks.add((current_time, task))
+                task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
             _ = await self._redis_conn.get(active_status_key)
             if _:
@@ -977,6 +995,24 @@ class ProcessorDistributor(multiprocessing.Process):
             )
             await q_obj.bind(exchange, routing_key=self._consume_queue_routing_key)
             await q_obj.consume(self._on_rabbitmq_message)
+
+    async def _cleanup_tasks(self):
+        """
+        Periodically clean up completed or timed-out tasks.
+        """
+        while True:
+            await asyncio.sleep(self._task_cleanup_interval)
+            for task_start_time, task in list(self._active_tasks):
+                current_time = time.time()
+                if task.done():
+                    self._active_tasks.discard((task_start_time, task))
+
+                elif current_time - task_start_time > self._task_timeout:
+                    self._logger.warning(
+                        f'Task {task} timed out. Cancelling..., current_time: {current_time}, start_time: {task_start_time}',
+                    )
+                    task.cancel()
+                    self._active_tasks.discard((task_start_time, task))
 
     def run(self) -> None:
         """
