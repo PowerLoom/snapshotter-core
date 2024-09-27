@@ -649,10 +649,10 @@ class GenericAsyncWorker(multiprocessing.Process):
             # For simulations, we'll still use a separate stream each time
             async with self._grpc_stub.SubmitSnapshotSimulation.open() as stream:
                 try:
-                    await asyncio.wait_for(stream.send_message(msg), timeout=10.0)
+                    await stream.send_message(msg)
                     self._logger.debug(f'Sent simulation message: {msg}')
 
-                    response = await asyncio.wait_for(stream.recv_message(), timeout=10.0)
+                    response = await asyncio.wait_for(stream.recv_message(), timeout=60.0)
 
                     if response and 'Success' in response.message:
                         self._logger.info(
@@ -662,15 +662,12 @@ class GenericAsyncWorker(multiprocessing.Process):
                         raise Exception(
                             f'Failed to send simulation snapshot, got response: {response} | type: {type(response)}',
                         )
-                except asyncio.TimeoutError:
-                    self._logger.warning('Timeout occurred while sending or receiving simulation message')
-                    raise Exception('Timeout occurred during simulation')
                 except Exception as e:
                     raise Exception(f'Failed to send simulation snapshot: {e}')
         else:
             try:
                 stream = await self.open_stream()
-                await asyncio.wait_for(stream.send_message(msg), timeout=10.0)
+                await asyncio.wait_for(stream.send_message(msg), timeout=60.0)
                 self._logger.debug(f'Sent message: {msg}')
                 # We don't wait for a response in non-simulation mode
                 self._logger.info('Message sent successfully')
