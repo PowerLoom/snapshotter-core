@@ -677,9 +677,12 @@ class GenericAsyncWorker(multiprocessing.Process):
         else:
             try:
                 async with self.open_stream() as stream:
-                    await stream.send_message(msg)
+                    await asyncio.wait_for(stream.send_message(msg), timeout=30)
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
+            except asyncio.TimeoutError:
+                self._logger.error('Timeout waiting for response, assuming success')
+                return
             except Exception as e:
                 self._logger.opt(exception=settings.logs.trace_enabled).error(f'Failed to send message: {e}')
                 raise Exception(f'Failed to send message: {e}')
