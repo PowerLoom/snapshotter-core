@@ -77,12 +77,12 @@ services:
     networks:
       - custom_network
   ipfs:
-    image: ipfs/kubo:release
+    image: ipfs/kubo:master-latest
     profiles: ["ipfs"]
     environment:
       - IPFS_PROFILE=server
       - DATA_CLEANUP_DAYS=3
-      - CLEANUP_SCHEDULE=0 * * * *
+      - CLEANUP_SCHEDULE=0 */3 * * *
     entrypoint: >
       /bin/sh -c '
       echo "Setting up data cleanup cron job...";
@@ -100,7 +100,8 @@ services:
       exec /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true --agent-version-suffix=docker
       '
     volumes:
-      - ipfs_data:/data/ipfs
+      - ./ipfs-export:/export
+      - ./ipfs-data:/data/ipfs
     ports:
       - "4001:4001"  # Swarm listening port
       - "5001:5001"  # API server
@@ -154,6 +155,3 @@ networks:
     ipam:
       config:
         - subnet: ${DOCKER_NETWORK_SUBNET}
-volumes:
-  ipfs_data:
-    name: ipfs_data
