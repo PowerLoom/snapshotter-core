@@ -4,7 +4,6 @@ This module contains the core API endpoints for the Snapshotter service.
 It includes functionality for health checks, epoch information retrieval,
 project data fetching, and task status checking.
 """
-
 from fastapi import FastAPI
 from fastapi import Request
 from fastapi import Response
@@ -117,7 +116,11 @@ async def get_current_epoch(
     """
     try:
         [current_epoch_data] = await request.app.state.anchor_rpc_helper.web3_call(
-            [request.app.state.protocol_state_contract.functions.currentEpoch(Web3.to_checksum_address(settings.data_market))],
+            [
+                request.app.state.protocol_state_contract.functions.currentEpoch(
+                Web3.to_checksum_address(settings.data_market),
+                ),
+            ],
         )
         current_epoch = {
             'begin': current_epoch_data[0],
@@ -158,7 +161,11 @@ async def get_epoch_info(
     """
     try:
         [epoch_info_data] = await request.app.state.anchor_rpc_helper.web3_call(
-            [request.app.state.protocol_state_contract.functions.epochInfo(Web3.to_checksum_address(settings.data_market), epoch_id)],
+            [
+                request.app.state.protocol_state_contract.functions.epochInfo(
+                Web3.to_checksum_address(settings.data_market), epoch_id,
+                ),
+            ],
         )
         epoch_info = {
             'timestamp': epoch_info_data[0],
@@ -207,7 +214,7 @@ async def get_project_last_finalized_epoch_info(
             contract_addr=protocol_state_contract_address,
             abi=protocol_state_contract_abi,
         )
-        
+
         # Get epoch info for the last finalized epoch
         [epoch_info_data] = await request.app.state.anchor_rpc_helper.web3_call(
             tasks=[
@@ -372,11 +379,15 @@ async def get_task_status_post(
 
     # Construct project ID
     project_id = f'{task_status_request.task_type}:{task_status_request.wallet_address.lower()}:{settings.namespace}'
-    
+
     try:
         # Get the last finalized epoch for the project
         [last_finalized_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
-            [request.app.state.protocol_state_contract.functions.lastFinalizedSnapshot(Web3.to_checksum_address(settings.data_market), project_id)],
+            [
+                request.app.state.protocol_state_contract.functions.lastFinalizedSnapshot(
+                Web3.to_checksum_address(settings.data_market), project_id,
+                ),
+            ],
         )
 
     except Exception as e:

@@ -463,8 +463,8 @@ class RpcHelper(object):
                 # Create a serializable version of the tasks
                 serializable_tasks = [
                     {
-                        "function_name": task[0],
-                        "args": task[1]
+                        'function_name': task[0],
+                        'args': task[1],
                     } for task in tasks
                 ]
                 exc = RPCException(
