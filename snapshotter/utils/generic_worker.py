@@ -651,8 +651,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                 try:
                     await stream.send_message(msg)
                     self._logger.debug(f'Sent simulation message: {msg}')
-
-                    response = await asyncio.wait_for(stream.recv_message(), timeout=60.0)
+                    response = await stream.recv_message()
 
                     if response and 'Success' in response.message:
                         self._logger.info(
