@@ -193,6 +193,9 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._task_timeout = settings.async_task_config.task_timeout
         self._task_cleanup_interval = settings.async_task_config.task_cleanup_interval
 
+        self._last_stream_close_time = 0
+        self._stream_lifetime = 30  # Close stream every 30 seconds
+
     def _signal_handler(self, signum, frame):
         """
         Signal handler function that cancels the core RMQ consumer when a SIGINT, SIGTERM or SIGQUIT signal is received.
@@ -566,18 +569,20 @@ class GenericAsyncWorker(multiprocessing.Process):
         finally:
             self._stream = None
 
-    async def _cancel_stream(self):
+    async def _close_stream(self):
         """
-        Cancels the current gRPC stream if it exists.
+        Closes the gRPC stream and logs the response.
         """
-        # TODO: check if this is needed
-        if self._stream is not None:
+        if self._stream:
             try:
-                await self._stream.cancel()
-            except:
-                self._logger.debug('Error cancelling stream, continuing...')
-            self._logger.debug('Stream cancelled due to inactivity.')
-            self._stream = None
+                await self._stream.end()
+                self._logger.info('Closed stream')
+            except Exception as e:
+                self._logger.error(f'Error closing stream: {e}')
+            finally:
+                self._stream = None
+
+        self._last_stream_close_time = time.time()
 
     async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
         """
@@ -617,9 +622,14 @@ class GenericAsyncWorker(multiprocessing.Process):
         try:
             if epoch_id == 0:
                 # send with timeout
-                await asyncio.wait_for(self.send_message(msg, simulation=True), timeout=60)
+                await self.send_message(msg, simulation=True)
             else:
-                await asyncio.wait_for(self.send_message(msg), timeout=60)
+                current_time = time.time()
+                if (current_time - self._last_stream_close_time) > self._stream_lifetime:
+                    await self._close_stream()
+
+                await self.send_message(msg)
+
         except asyncio.TimeoutError:
             self._logger.error('Timeout waiting for response, assuming success')
             return
@@ -671,6 +681,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
             except Exception as e:
+                self._logger.opt(exception=settings.logs.trace_enabled).error(f'Failed to send message: {e}')
                 raise Exception(f'Failed to send message: {e}')
 
     async def _init_grpc(self):
