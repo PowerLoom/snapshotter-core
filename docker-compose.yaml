@@ -98,13 +98,21 @@ services:
       echo "Starting cron daemon...";
       crond;
 
+      echo "Checking for IPFS initialization...";
+      if [ ! -f /data/ipfs/config ]; then
+        echo "Initializing IPFS...";
+        ipfs init;
+        ipfs config Routing.Type dhtclient;
+        ipfs config --json API.HTTPHeaders.Access-Control-Allow-Origin "[\"*\"]";
+        ipfs config --json API.HTTPHeaders.Access-Control-Allow-Methods "[\"PUT\", \"POST\", \"GET\"]";
+      fi
+
       echo "Starting IPFS daemon...";
-      ipfs config Routing.Type dhtclient;
       exec ipfs daemon --migrate=true --agent-version-suffix=docker
       '
     volumes:
-      - ./ipfs-export:/export
       - ./ipfs-data:/data/ipfs
+      - ./ipfs-export:/export
     ports:
       - "4001:4001"  # Swarm listening port
       - "5001:5001"  # API server
