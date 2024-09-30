@@ -4,10 +4,12 @@ source .env
 
 rm -rf ipfs-data
 rm -rf ipfs-export
+# cleaning these too just to be safe
+rm -rf ipfs_data
+rm -rf ipfs_export
 
 mkdir ipfs-data
 mkdir ipfs-export
-
 # cleanup logs
 rm -rf logs;
 mkdir logs;

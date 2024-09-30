@@ -15,3 +15,7 @@ snapshotter-lite-local-collector
 config
 computes
 logs
+ipfs-data
+ipfs-export
+ipfs_data
+ipfs_export

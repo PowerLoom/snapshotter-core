@@ -83,6 +83,8 @@ services:
       - IPFS_PROFILE=server
       - DATA_CLEANUP_DAYS=3
       - CLEANUP_SCHEDULE=0 */3 * * *
+      - LIBP2P_FORCE_PNET=0
+      - IPFS_ROUTING=dhtclient
     entrypoint: >
       /bin/sh -c '
       echo "Setting up data cleanup cron job...";
@@ -97,7 +99,8 @@ services:
       crond;
 
       echo "Starting IPFS daemon...";
-      exec /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true --agent-version-suffix=docker
+      ipfs config Routing.Type dhtclient;
+      exec ipfs daemon --migrate=true --agent-version-suffix=docker
       '
     volumes:
       - ./ipfs-export:/export
@@ -114,6 +117,13 @@ services:
     restart: unless-stopped
     networks:
       - custom_network
+    sysctls:
+      net.core.rmem_max: 8388608
+      net.core.wmem_max: 8388608
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
   redis:
     command: redis-server --appendonly yes
     image: "redis:alpine"
