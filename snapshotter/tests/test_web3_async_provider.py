@@ -35,7 +35,7 @@ async def test_web3_async_call():
 
     # Set up the RPC helper with the anchor chain RPC
     rpc_helper = RpcHelper(settings.anchor_chain_rpc)
-    await rpc_helper.init(writer_redis_pool)
+    await rpc_helper.init()
 
     # Create a synchronous Web3 client
     sync_w3_client = Web3(HTTPProvider(settings.anchor_chain_rpc.full_nodes[0].url))
@@ -52,7 +52,7 @@ async def test_web3_async_call():
     ]
 
     # Execute the Web3 call asynchronously
-    result = await rpc_helper.web3_call(tasks, redis_conn=writer_redis_pool)
+    result = await rpc_helper.web3_call(tasks)
     logger.debug('Retrieve: {}', result)
 
 

@@ -13,7 +13,7 @@ from snapshotter.utils.rpc import RpcHelper
 class TxReceiptProcessor(GenericDelegateProcessor):
     """
     A processor class for handling transaction receipts.
-    
+
     This class extends GenericDelegateProcessor and provides functionality
     to process and fetch transaction receipts.
     """
@@ -63,7 +63,6 @@ class TxReceiptProcessor(GenericDelegateProcessor):
         # Fetch the transaction receipt
         tx_receipt_obj: web3.datastructures.AttributeDict = await rpc_helper.get_transaction_receipt(
             tx_hash,
-            redis_conn,
         )
 
         # Convert AttributeDict to regular dictionary

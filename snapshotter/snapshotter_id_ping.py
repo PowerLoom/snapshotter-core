@@ -23,7 +23,7 @@ async def main():
 
     # Initialize RPC helper for anchor chain
     anchor_rpc = RpcHelper(settings.anchor_chain_rpc)
-    await anchor_rpc.init(redis_conn=redis_conn)
+    await anchor_rpc.init()
 
     # Load protocol state ABI
     protocol_abi = read_json_file(settings.protocol_state.abi)

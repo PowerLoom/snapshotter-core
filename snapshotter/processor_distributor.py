@@ -184,9 +184,9 @@ class ProcessorDistributor(multiprocessing.Process):
         Initializes the RpcHelper instance if it is not already initialized.
         """
         self._rpc_helper = RpcHelper()
-        await self._rpc_helper.init(redis_conn=self._redis_conn)
+        await self._rpc_helper.init()
         self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
-        await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
+        await self._anchor_rpc_helper.init()
 
     async def _init_rabbitmq_connection(self):
         """
