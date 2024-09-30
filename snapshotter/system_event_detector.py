@@ -476,3 +476,9 @@ class EventDetectorProcess(multiprocessing.Process):
 
         # Start the event detection loop
         self.ev_loop.run_until_complete(self._detect_events())
+
+
+if __name__ == '__main__':
+    event_detector = EventDetectorProcess('SystemEventDetector')
+    event_detector.start()
+    event_detector.join()

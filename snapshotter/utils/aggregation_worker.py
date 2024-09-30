@@ -387,3 +387,9 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             await self._init_project_calculation_mapping()
             await self._init_ipfs_client()
             await self.init()
+
+
+if __name__ == '__main__':
+    aggregation_worker = AggregationAsyncWorker('AggregationAsyncWorker')
+    aggregation_worker.start()
+    aggregation_worker.join()

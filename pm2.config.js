@@ -4,20 +4,11 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const MAX_RESTART = 10;
 const MIN_UPTIME = 60000;
 
+const settings = require('./config/settings.json');
+const callback_worker_config = settings.callback_worker_config;
 
 module.exports = {
   apps : [
-    {
-      name   : "process-hub-core",
-      script : `poetry run python -m snapshotter.launch_process_hub_core`,
-      max_restarts: MAX_RESTART,
-      min_uptime: MIN_UPTIME,
-      error_file: "/dev/null",
-      out_file: "/dev/null",
-      env: {
-        NODE_ENV: NODE_ENV
-      }
-    },
     {
       name   : "core-api",
       script : `poetry run python -m snapshotter.gunicorn_core_launcher`,
@@ -45,6 +36,64 @@ module.exports = {
     {
       name   : "health-manager",
       script : `poetry run python -m snapshotter.health_manager`,
+      max_restarts: MAX_RESTART,
+      min_uptime: MIN_UPTIME,
+      error_file: "/dev/null",
+      out_file: "/dev/null",
+      env: {
+        NODE_ENV: NODE_ENV,
+      }
+    },
+    {
+      name   : "processor-distributor",
+      script : `poetry run python -m snapshotter.processor_distributor`,
+      max_restarts: MAX_RESTART,
+      min_uptime: MIN_UPTIME,
+      error_file: "/dev/null",
+      out_file: "/dev/null",
+      env: {
+        NODE_ENV: NODE_ENV,
+      }
+    },
+    {
+      name   : "system-event-detector",
+      script : `poetry run python -m snapshotter.system_event_detector`,
+      max_restarts: MAX_RESTART,
+      min_uptime: MIN_UPTIME,
+      error_file: "/dev/null",
+      out_file: "/dev/null",
+      env: {
+        NODE_ENV: NODE_ENV,
+      }
+    },
+    {
+      name   : "delegate-worker",
+      script : `poetry run python -m snapshotter.utils.delegate_worker`,
+      instances: callback_worker_config.num_delegate_workers,
+      max_restarts: MAX_RESTART,
+      min_uptime: MIN_UPTIME,
+      error_file: "/dev/null",
+      out_file: "/dev/null",
+      env: {
+        NODE_ENV: NODE_ENV,
+      }
+    },
+    {
+      name   : "snapshot-worker",
+      script : `poetry run python -m snapshotter.utils.snapshot_worker`,
+      instances: callback_worker_config.num_snapshot_workers,
+      max_restarts: MAX_RESTART,
+      min_uptime: MIN_UPTIME,
+      error_file: "/dev/null",
+      out_file: "/dev/null",
+      env: {
+        NODE_ENV: NODE_ENV,
+      }
+    },
+    {
+      name   : "aggregation-worker",
+      script : `poetry run python -m snapshotter.utils.aggregation_worker`,
+      instances: callback_worker_config.num_aggregation_workers,
       max_restarts: MAX_RESTART,
       min_uptime: MIN_UPTIME,
       error_file: "/dev/null",

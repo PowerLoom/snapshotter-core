@@ -29,36 +29,6 @@ def create_rabbitmq_conn() -> pika.BlockingConnection:
     return c
 
 
-def processhub_command_publish(
-    ch: pika.adapters.blocking_connection.BlockingChannel, cmd: str,
-) -> None:
-    """
-    Publishes a command to the processhub-commands exchange.
-
-    Args:
-        ch (pika.adapters.blocking_connection.BlockingChannel): The channel to use for publishing.
-        cmd (str): The command to publish.
-
-    Returns:
-        None
-    """
-    # Construct the exchange name and routing key using namespace and instance ID
-    exchange = f'{settings.rabbitmq.setup.core.exchange}:{settings.namespace}'
-    routing_key = f'processhub-commands:{settings.namespace}:{settings.instance_id}'
-
-    ch.basic_publish(
-        exchange=exchange,
-        routing_key=routing_key,
-        body=cmd.encode('utf-8'),
-        properties=pika.BasicProperties(
-            delivery_mode=2,
-            content_type='text/plain',
-            content_encoding='utf-8',
-        ),
-        mandatory=True,
-    )
-
-
 def get_snapshot_queue_routing_key_pattern() -> tuple[str, str]:
     """
     Returns the queue name and routing key pattern for snapshot messages.
@@ -317,15 +287,6 @@ def init_exchanges_queues():
     init_rmq_logger.debug(
         'Initialized RabbitMQ Direct exchange: {}', exchange_name,
     )
-
-    # Initialize processhub commands queue
-    to_be_inited = [
-        ('powerloom-processhub-commands-q', 'processhub-commands'),
-    ]
-    for queue_name, routing_key in to_be_inited:
-        q = f'{queue_name}:{settings.namespace}:{settings.instance_id}'
-        r = f'{routing_key}:{settings.namespace}:{settings.instance_id}'
-        init_queue(ch, q, r, exchange_name)
 
     # Initialize other queues
     init_callback_queue(ch)

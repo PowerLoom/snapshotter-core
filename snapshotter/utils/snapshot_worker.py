@@ -449,3 +449,9 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             await self._init_project_calculation_mapping()
             await self._init_ipfs_client()
             await self.init()
+
+
+if __name__ == '__main__':
+    snapshot_worker = SnapshotAsyncWorker('SnapshotAsyncWorker')
+    snapshot_worker.start()
+    snapshot_worker.join()

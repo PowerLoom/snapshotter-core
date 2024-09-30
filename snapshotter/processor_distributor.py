@@ -1046,3 +1046,8 @@ class ProcessorDistributor(multiprocessing.Process):
             ev_loop.run_forever()
         finally:
             ev_loop.close()
+
+
+if __name__ == '__main__':
+    processor_distributor = ProcessorDistributor('ProcessorDistributor')
+    processor_distributor.run()

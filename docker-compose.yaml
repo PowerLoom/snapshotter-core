@@ -38,6 +38,10 @@ services:
       - "redis"
       - "rabbitmq"
       - "snapshotter-local-collector"
+    depends_on:
+      - "redis"
+      - "rabbitmq"
+      - "snapshotter-local-collector"
     volumes:
       - ./logs/snapshotter:/logs
       - ./config:/config

@@ -157,13 +157,12 @@ class GenericAsyncWorker(multiprocessing.Process):
     """
     _active_tasks: Set[asyncio.Task]
 
-    def __init__(self, name, signer_idx, **kwargs):
+    def __init__(self, name, **kwargs):
         """
         Initializes a GenericAsyncWorker instance.
 
         Args:
             name (str): The name of the worker.
-            signer_idx (int): The index of the signer to use from the list in settings.
             **kwargs: Additional keyword arguments to pass to the superclass constructor.
         """
         self._core_rmq_consumer: asyncio.Task
@@ -173,7 +172,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         super(GenericAsyncWorker, self).__init__(name=name, **kwargs)
         self._protocol_state_contract = None
         self._qos = 1
-        self._signer_index = signer_idx
         self._rate_limiting_lua_scripts = None
 
         self.protocol_state_contract_address = Web3.to_checksum_address(settings.protocol_state.address)

@@ -244,3 +244,9 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             module = importlib.import_module(delegate_task.module)
             class_ = getattr(module, delegate_task.class_name)
             self._delegate_task_calculation_mapping[key] = class_()
+
+
+if __name__ == '__main__':
+    delegate_worker = DelegateAsyncWorker('DelegateAsyncWorker')
+    delegate_worker.start()
+    delegate_worker.join()
