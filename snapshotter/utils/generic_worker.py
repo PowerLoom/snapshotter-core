@@ -46,7 +46,7 @@ from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.data_utils import get_snapshot_submision_window
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
@@ -88,7 +88,7 @@ def web3_storage_retry_state_callback(retry_state: tenacity.RetryCallState):
         None
     """
     if retry_state and retry_state.outcome.failed:
-        logger.warning(
+        default_logger.warning(
             f'Encountered web3 storage upload exception: {retry_state.outcome.exception()} | args: {retry_state.args}, kwargs:{retry_state.kwargs}',
         )
 
@@ -104,7 +104,7 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
         None
     """
     if retry_state.attempt_number >= 3:
-        logger.error(
+        default_logger.error(
             'Txn signing worker failed after 3 attempts | Txn payload: {} | Signer: {}', retry_state.kwargs[
                 'txn_payload'
             ], retry_state.kwargs['signer_in_use'].address,
@@ -114,18 +114,18 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
             if 'nonce' in str(retry_state.outcome.exception()):
                 # Reassigning the signer object to ensure nonce is reset
                 retry_state.kwargs['signer_in_use'] = retry_state.args[0]._signer
-                logger.warning(
+                default_logger.warning(
                     'Tx signing worker attempt number {} result {} failed with nonce exception | Reset nonce and reassigned signer object: {} with nonce {} | Txn payload: {}',
                     retry_state.attempt_number, retry_state.outcome, retry_state.kwargs['signer_in_use'].address,
                     retry_state.kwargs['signer_in_use'].nonce, retry_state.kwargs['txn_payload'],
                 )
             else:
-                logger.warning(
+                default_logger.warning(
                     'Tx signing worker attempt number {} result {} failed with exception {} | Txn payload: {}',
                     retry_state.attempt_number, retry_state.outcome, retry_state.outcome.exception(
                     ), retry_state.kwargs['txn_payload'],
                 )
-        logger.warning(
+        default_logger.warning(
             'Tx signing worker {} attempt number {} result {} | Txn payload: {}',
             retry_state.kwargs['signer_in_use'].address, retry_state.attempt_number, retry_state.outcome,
             retry_state.kwargs['txn_payload'],
@@ -143,7 +143,7 @@ def ipfs_upload_retry_state_callback(retry_state: tenacity.RetryCallState):
         None
     """
     if retry_state and retry_state.outcome.failed:
-        logger.warning(
+        default_logger.warning(
             f'Encountered ipfs upload exception: {retry_state.outcome.exception()} | args: {retry_state.args}, kwargs:{retry_state.kwargs}',
         )
 
@@ -786,7 +786,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
         running the event loop until it is stopped.
         """
-        self._logger = logger.bind(module=self.name)
+        self._logger = default_logger.bind(module=self.name)
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,

@@ -3,7 +3,7 @@ import signal
 from snapshotter.init_rabbitmq import init_exchanges_queues
 from snapshotter.process_hub_core import ProcessHubCore
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.exceptions import GenericExitOnSignal
 
 
@@ -44,8 +44,8 @@ def main():
 
     # Initialize logging
     # Using bind to pass extra parameters to the logger, will show up in the {extra} field
-    launcher_logger = logger.bind(
-        module='Powerloom|SnapshotterProcessHub|Core|Launcher',
+    launcher_logger = default_logger.bind(
+        module='SnapshotterProcessHub|Core|Launcher',
         namespace=settings.namespace,
         instance_id=settings.instance_id[:5],
     )
@@ -54,7 +54,7 @@ def main():
     init_exchanges_queues()
 
     # Create and start ProcessHubCore
-    p_name = f'Powerloom|SnapshotterProcessHub|Core-{settings.instance_id[:5]}'
+    p_name = f'SnapshotterProcessHub|Core-{settings.instance_id[:5]}'
     core = ProcessHubCore(name=p_name)
     core.start()
     launcher_logger.debug('Launched {} with PID {}', p_name, core.pid)

@@ -20,7 +20,7 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.data_models import SnapshotterEpochProcessingReportItem
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
@@ -422,7 +422,7 @@ class HealthManager(multiprocessing.Process):
         This method sets up the event loop, initializes all necessary components,
         and starts the main health check loop.
         """
-        self._logger = logger.bind(
+        self._logger = default_logger.bind(
             module='HealthManager',
         )
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)

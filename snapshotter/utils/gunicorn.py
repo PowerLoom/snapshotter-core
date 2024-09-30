@@ -4,7 +4,7 @@ import os
 from gunicorn.app.base import BaseApplication
 from gunicorn.glogging import Logger
 
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 
 # Set the log level based on the environment variable 'LOG_LEVEL', defaulting to 'DEBUG'
 LOG_LEVEL = logging.getLevelName(os.environ.get('LOG_LEVEL', 'DEBUG'))
@@ -12,7 +12,7 @@ LOG_LEVEL = logging.getLevelName(os.environ.get('LOG_LEVEL', 'DEBUG'))
 
 class InterceptHandler(logging.Handler):
     """
-    A custom logging handler that intercepts log records and forwards them to Loguru logger.
+    A custom logging handler that intercepts log records and forwards them to Loguru default_logger.
 
     This handler is designed to bridge the gap between Python's standard logging
     and the Loguru logger, allowing for seamless integration of both logging systems.
@@ -27,7 +27,7 @@ class InterceptHandler(logging.Handler):
         """
         # Get corresponding Loguru level if it exists
         try:
-            level = logger.level(record.levelname).name
+            level = default_logger.level(record.levelname).name
         except ValueError:
             level = record.levelno
 
@@ -38,7 +38,7 @@ class InterceptHandler(logging.Handler):
             depth += 1
 
         # Log the message using Loguru
-        logger.opt(depth=depth, exception=record.exc_info).log(
+        default_logger.opt(depth=depth, exception=record.exc_info).log(
             level,
             record.getMessage(),
         )
@@ -61,15 +61,15 @@ class StubbedGunicornLogger(Logger):
         :type cfg: gunicorn.config.Config
         """
         handler = logging.NullHandler()
-        
+
         # Set up error logger
         self.error_logger = logging.getLogger('gunicorn.error')
         self.error_logger.addHandler(handler)
-        
+
         # Set up access logger
         self.access_logger = logging.getLogger('gunicorn.access')
         self.access_logger.addHandler(handler)
-        
+
         # Set log levels
         self.error_log.setLevel(LOG_LEVEL)
         self.access_log.setLevel(LOG_LEVEL)

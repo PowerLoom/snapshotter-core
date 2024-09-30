@@ -40,7 +40,7 @@ from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_as
 from snapshotter.utils.data_utils import get_snapshot_submision_window
 from snapshotter.utils.data_utils import get_source_chain_epoch_size
 from snapshotter.utils.data_utils import get_source_chain_id
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import SnapshotterStates
 from snapshotter.utils.models.data_models import SnapshotterStateUpdate
@@ -119,8 +119,8 @@ class ProcessorDistributor(multiprocessing.Process):
         """
         super(ProcessorDistributor, self).__init__(name=name, **kwargs)
         self._unique_id = f'{name}-' + keccak(text=str(uuid4())).hex()[:8]
-        self._logger = logger.bind(
-            module=f'Powerloom|Callbacks|ProcessDistributor:{settings.namespace}-{settings.instance_id}',
+        self._logger = default_logger.bind(
+            module=f'Callbacks|ProcessDistributor:{settings.namespace}-{settings.instance_id}',
         )
         self._q = queue.Queue()
         self._rabbitmq_interactor = None

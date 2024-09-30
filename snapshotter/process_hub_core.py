@@ -27,7 +27,7 @@ from snapshotter.settings.config import settings
 from snapshotter.system_event_detector import EventDetectorProcess
 from snapshotter.utils.aggregation_worker import AggregationAsyncWorker
 from snapshotter.utils.callback_helpers import send_failure_notifications_sync
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.delegate_worker import DelegateAsyncWorker
 from snapshotter.utils.exceptions import SelfExitException
 from snapshotter.utils.file_utils import read_json_file
@@ -48,12 +48,12 @@ from snapshotter.utils.snapshot_worker import SnapshotAsyncWorker
 PROC_STR_ID_TO_CLASS_MAP = {
     'SystemEventDetector': {
         'class': EventDetectorProcess,
-        'name': 'Powerloom|SystemEventDetector',
+        'name': 'SystemEventDetector',
         'target': None,
     },
     'ProcessorDistributor': {
         'class': ProcessorDistributor,
-        'name': 'Powerloom|ProcessorDistributor',
+        'name': 'ProcessorDistributor',
         'target': None,
     },
 }
@@ -270,7 +270,7 @@ class ProcessHubCore(Process):
         """
         Terminates all core worker processes.
         """
-        logger.error(
+        self._logger.error(
             'Waiting on spawned core workers to join... {}',
             self._spawned_processes_map,
         )
@@ -340,7 +340,7 @@ class ProcessHubCore(Process):
         signer_idx = 0
         for _ in range(num_workers):
             unique_id = str(uuid.uuid4())[:5]
-            unique_name = f'Powerloom|{worker_class.__name__}:{settings.namespace}:{settings.instance_id}-{unique_id}'
+            unique_name = f'{worker_class.__name__}:{settings.namespace}:{settings.instance_id}-{unique_id}'
             worker_obj = worker_class(name=unique_name, signer_idx=signer_idx)
             worker_obj.start()
             self._spawned_cb_processes_map[worker_type].update(
@@ -426,7 +426,7 @@ class ProcessHubCore(Process):
         Protocol State contract, source chain block time, epoch size, snapshot callback workers,
         internal state reporter, RabbitMQ consumer, and raises a SelfExitException to exit the process.
         """
-        self._logger = logger.bind(module='Powerloom|ProcessHub|Core')
+        self._logger = default_logger.bind(module='ProcessHub|Core')
 
         # Set up signal handlers
         for signame in [SIGINT, SIGTERM, SIGQUIT, SIGCHLD]:
@@ -508,7 +508,7 @@ class ProcessHubCore(Process):
         self.rabbitmq_interactor: RabbitmqSelectLoopInteractor = RabbitmqSelectLoopInteractor(
             consume_queue_name=queue_name,
             consume_callback=self.callback,
-            consumer_worker_name=f'Powerloom|ProcessHub|Core-{settings.instance_id[:5]}',
+            consumer_worker_name=f'ProcessHub|Core-{settings.instance_id[:5]}',
         )
         self._logger.debug('Starting RabbitMQ consumer on queue {}', queue_name)
         self.rabbitmq_interactor.run()
@@ -625,10 +625,10 @@ class ProcessHubCore(Process):
 
 
 if __name__ == '__main__':
-    p = ProcessHubCore(name='Powerloom|SnapshotterProcessHub|Core')
+    p = ProcessHubCore(name='SnapshotterProcessHub|Core')
     p.start()
     while p.is_alive():
-        logger.debug('Process hub core is still alive. waiting on it to join...')
+        default_logger.debug('Process hub core is still alive. waiting on it to join...')
         try:
             p.join()
         except:

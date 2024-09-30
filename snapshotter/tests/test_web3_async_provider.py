@@ -11,7 +11,7 @@ from web3 import Web3
 from web3.eth import AsyncEth
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.rpc import RpcHelper
 
@@ -53,7 +53,7 @@ async def test_web3_async_call():
 
     # Execute the Web3 call asynchronously
     result = await rpc_helper.web3_call(tasks, redis_conn=writer_redis_pool)
-    logger.debug('Retrieve: {}', result)
+    default_logger.debug('Retrieve: {}', result)
 
 
 if __name__ == '__main__':
@@ -62,4 +62,4 @@ if __name__ == '__main__':
         asyncio.get_event_loop().run_until_complete(test_web3_async_call())
     except Exception as e:
         # Log any exceptions that occur during execution
-        logger.opt(exception=True).error('exception: {}', e)
+        default_logger.opt(exception=True).error('exception: {}', e)

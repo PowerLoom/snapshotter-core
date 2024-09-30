@@ -1,10 +1,10 @@
 import pika
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 
 # Setup logging for RabbitMQ initialization
-init_rmq_logger = logger.bind(module='Powerloom|RabbitMQ|Init')
+init_rmq_logger = default_logger.bind(module='RabbitMQ|Init')
 
 
 def create_rabbitmq_conn() -> pika.BlockingConnection:
@@ -165,7 +165,7 @@ def init_topic_exchange_and_queue(
     init_rmq_logger.debug(
         'Initialized RabbitMQ Topic exchange: {}', exchange_name,
     )
-    
+
     # Initialize the queue and bind it to the exchange
     init_queue(
         ch=ch,
@@ -188,7 +188,7 @@ def init_callback_queue(
         None
     """
     callback_exchange_name = f'{settings.rabbitmq.setup.callbacks.exchange}:{settings.namespace}'
-    
+
     # Initialize snapshot queue
     queue_name, routing_key_pattern = get_snapshot_queue_routing_key_pattern()
     init_topic_exchange_and_queue(
@@ -223,7 +223,7 @@ def init_commit_payload_queue(
     commit_payload_exchange_name = f'{settings.rabbitmq.setup.commit_payload.exchange}:{settings.namespace}'
     routing_key_pattern = f'powerloom-backend-commit-payload:{settings.namespace}:{settings.instance_id}.*'
     queue_name = f'powerloom-backend-commit-payload-queue:{settings.namespace}:{settings.instance_id}'
-    
+
     init_topic_exchange_and_queue(
         ch,
         exchange_name=commit_payload_exchange_name,
@@ -290,7 +290,7 @@ def init_event_detector_queue(
     event_detector_exchange_name = f'{settings.rabbitmq.setup.event_detector.exchange}:{settings.namespace}'
     routing_key_pattern = f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}.*'
     queue_name = f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}'
-    
+
     init_topic_exchange_and_queue(
         ch,
         exchange_name=event_detector_exchange_name,
@@ -308,7 +308,7 @@ def init_exchanges_queues():
     # Create a new RabbitMQ connection
     c = create_rabbitmq_conn()
     ch: pika.adapters.blocking_connection.BlockingChannel = c.channel()
-    
+
     # Initialize core exchange
     exchange_name = f'{settings.rabbitmq.setup.core.exchange}:{settings.namespace}'
     ch.exchange_declare(
