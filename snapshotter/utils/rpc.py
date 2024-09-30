@@ -189,14 +189,11 @@ class RpcHelper(object):
             self._logger.info('Loaded async web3 provider for node {}: {}', node['rpc_url'], node['web3_client_async'])
         self._logger.info('Post async web3 provider loading: {}', self._nodes)
 
-    async def init(self, redis_conn=None):
+    async def init(self):
         """
         Initializes the RPC client by loading web3 providers and rate limits,
         loading rate limit SHAs, initializing HTTP clients, and loading async
         web3 providers.
-
-        Args:
-            redis_conn: Redis connection object.
 
         Returns:
             None
@@ -310,13 +307,8 @@ class RpcHelper(object):
             return await coroutine
 
     @acquire_rpc_semaphore
-    async def get_current_block_number(self, redis_conn=None):
+    async def get_current_block_number(self):
         """
-        Returns the current block number of the Ethereum blockchain.
-
-        Args:
-            redis_conn: Redis connection object.
-
         Returns:
             int: The current block number of the Ethereum blockchain.
 
@@ -350,13 +342,12 @@ class RpcHelper(object):
         return await f(node_idx=0)
 
     @acquire_rpc_semaphore
-    async def get_transaction_receipt(self, tx_hash, redis_conn=None):
+    async def get_transaction_receipt(self, tx_hash):
         """
         Retrieves the transaction receipt for a given transaction hash.
 
         Args:
             tx_hash (str): The transaction hash for which to retrieve the receipt.
-            redis_conn: Redis connection object.
 
         Returns:
             dict: The transaction receipt details as a dictionary.
@@ -395,12 +386,11 @@ class RpcHelper(object):
         return await f(node_idx=0)
 
     @acquire_rpc_semaphore
-    async def get_current_block(self, redis_conn=None, node_idx=0):
+    async def get_current_block(self, node_idx=0):
         """
         Returns the current block number of the Ethereum blockchain.
 
         Args:
-            redis_conn: Redis connection object.
             node_idx (int): Index of the node to use for the RPC call.
 
         Returns:
@@ -496,13 +486,12 @@ class RpcHelper(object):
         return await f(node_idx=0)
 
     @acquire_rpc_semaphore
-    async def _make_rpc_jsonrpc_call(self, rpc_query, redis_conn=None):
+    async def _make_rpc_jsonrpc_call(self, rpc_query):
         """
         Makes an RPC JSON-RPC call to a node in the pool.
 
         Args:
             rpc_query (dict): The JSON-RPC query to be sent.
-            redis_conn (Redis): The Redis connection object.
 
         Returns:
             dict: The JSON-RPC response data.
@@ -584,7 +573,6 @@ class RpcHelper(object):
     async def batch_eth_get_balance_on_block_range(
             self,
             address,
-            redis_conn,
             from_block,
             to_block,
     ):
@@ -593,7 +581,6 @@ class RpcHelper(object):
 
         Args:
             address (str): The Ethereum address to retrieve the balance for.
-            redis_conn (redis.Redis): The Redis connection object.
             from_block (int): The starting block number.
             to_block (int): The ending block number.
 
@@ -615,7 +602,7 @@ class RpcHelper(object):
             request_id += 1
 
         try:
-            response_data = await self._make_rpc_jsonrpc_call(rpc_query, redis_conn)
+            response_data = await self._make_rpc_jsonrpc_call(rpc_query)
 
             rpc_response = []
             if not isinstance(response_data, list) and response_data is not None and isinstance(response_data, dict):
@@ -635,7 +622,6 @@ class RpcHelper(object):
         abi_dict,
         function_name,
         contract_address,
-        redis_conn,
         from_block,
         to_block,
         params: Union[List, None] = None,
@@ -648,7 +634,6 @@ class RpcHelper(object):
             abi_dict (dict): The ABI dictionary of the contract.
             function_name (str): The name of the function to call.
             contract_address (str): The address of the contract.
-            redis_conn (redis.Redis): The Redis connection object.
             from_block (int): The starting block number.
             to_block (int): The ending block number.
             params (list, optional): The list of parameters to pass to the function. Defaults to None.
@@ -683,7 +668,7 @@ class RpcHelper(object):
             )
             request_id += 1
 
-        response_data = await self._make_rpc_jsonrpc_call(rpc_query, redis_conn=redis_conn)
+        response_data = await self._make_rpc_jsonrpc_call(rpc_query)
         rpc_response = []
         if isinstance(response_data, list):
             response = response_data
@@ -707,7 +692,6 @@ class RpcHelper(object):
         abi_dict,
         function_name,
         contract_address,
-        redis_conn,
         from_block,
         to_block,
         params: Union[List, None] = None,
@@ -720,7 +704,6 @@ class RpcHelper(object):
             abi_dict (dict): The ABI dictionary of the contract.
             function_name (str): The name of the function to call.
             contract_address (str): The address of the contract.
-            redis_conn (redis.Redis): The Redis connection object.
             from_block (int): The starting block number.
             to_block (int): The ending block number.
             params (list, optional): The list of parameters to pass to the function. Defaults to None.
@@ -755,7 +738,7 @@ class RpcHelper(object):
             )
             request_id += 1
 
-        response_data = await self._make_rpc_jsonrpc_call(rpc_query, redis_conn=redis_conn)
+        response_data = await self._make_rpc_jsonrpc_call(rpc_query)
         rpc_response = []
 
         # Return the hexbytes data to be decoded outside the function
@@ -769,14 +752,13 @@ class RpcHelper(object):
 
         return rpc_response
 
-    async def batch_eth_get_block(self, from_block, to_block, redis_conn):
+    async def batch_eth_get_block(self, from_block, to_block):
         """
         Batch retrieves Ethereum blocks using eth_getBlockByNumber JSON-RPC method.
 
         Args:
             from_block (int): The block number to start retrieving from.
             to_block (int): The block number to stop retrieving at.
-            redis_conn (redis.Redis): Redis connection object.
 
         Returns:
             dict: A dictionary containing the response data from the JSON-RPC call.
@@ -798,12 +780,12 @@ class RpcHelper(object):
             )
             request_id += 1
 
-        response_data = await self._make_rpc_jsonrpc_call(rpc_query, redis_conn=redis_conn)
+        response_data = await self._make_rpc_jsonrpc_call(rpc_query)
         return response_data
 
     @acquire_rpc_semaphore
     async def get_events_logs(
-        self, contract_address, to_block, from_block, topics, event_abi, redis_conn=None,
+        self, contract_address, to_block, from_block, topics, event_abi,
     ):
         """
         Returns all events logs for a given contract address, within a specified block range and with specified topics.
@@ -814,7 +796,6 @@ class RpcHelper(object):
             from_block (int): The lowest block number to retrieve events logs from.
             topics (List[str]): A list of topics to filter the events logs by.
             event_abi (Dict): The ABI of the event to decode the logs with.
-            redis_conn (Redis): The Redis connection object to use for rate limiting.
 
         Returns:
             List[Dict]: A list of dictionaries representing the decoded events logs.
@@ -870,17 +851,16 @@ class RpcHelper(object):
 
         return await f(node_idx=0)
 
-    async def eth_get_block(self, redis_conn=None, block_number=None):
+    async def eth_get_block(self, block_number=None):
         """
         Batch retrieves Ethereum blocks using eth_getBlockByNumber JSON-RPC method.
         Args:
             block_number (int): The block number to retrieve.
-            redis_conn (redis.Redis): Redis connection object.
         Returns:
             JSON-RPC response: A response containing the block data from the JSON-RPC call to fetch the respective block.
         """
         if not self._initialized:
-            await self.init(redis_conn)
+            await self.init()
 
         rpc_query = []
         block = hex(block_number) if block_number is not None else 'latest'
