@@ -183,20 +183,14 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             # Execute Redis pipeline
             await p.execute()
 
-            # Commit payload asynchronously
-            current_time = time.time()
-            task = asyncio.create_task(
-                self._commit_payload(
-                    task_type=task_type,
-                    _ipfs_writer_client=self._ipfs_writer_client,
-                    project_id=project_id,
-                    epoch=msg_obj,
-                    snapshot=snapshot,
-                    storage_flag=settings.web3storage.upload_snapshots,
-                ),
+            await self._commit_payload(
+                task_type=task_type,
+                project_id=project_id,
+                epoch=msg_obj,
+                snapshot=snapshot,
+                storage_flag=settings.web3storage.upload_snapshots,
+                _ipfs_writer_client=self._ipfs_writer_client,
             )
-            self._active_tasks.add((current_time, task))
-            task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def _process_bulk_mode(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """
@@ -313,20 +307,14 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 )
                 await p.execute()
 
-                # Commit payload asynchronously
-                current_time = time.time()
-                task = asyncio.create_task(
-                    self._commit_payload(
-                        task_type=task_type,
-                        _ipfs_writer_client=self._ipfs_writer_client,
-                        project_id=project_id,
-                        epoch=msg_obj,
-                        snapshot=snapshot,
-                        storage_flag=settings.web3storage.upload_snapshots,
-                    ),
+                await self._commit_payload(
+                    task_type=task_type,
+                    project_id=project_id,
+                    epoch=msg_obj,
+                    snapshot=snapshot,
+                    storage_flag=settings.web3storage.upload_snapshots,
+                    _ipfs_writer_client=self._ipfs_writer_client,
                 )
-                self._active_tasks.add((current_time, task))
-                task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
     async def _process_task(self, msg_obj: PowerloomSnapshotProcessMessage, task_type: str):
         """

@@ -443,12 +443,7 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         # Upload to web3 storage
         if storage_flag:
-            current_time = time.time()
-            task = asyncio.create_task(
-                self._upload_web3_storage(snapshot_bytes),
-            )
-            self._active_tasks.add((current_time, task))
-            task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
+            await self._create_tracked_task(self._upload_web3_storage(snapshot_bytes))
 
     async def _rabbitmq_consumer(self, loop):
         """
@@ -584,6 +579,34 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         self._last_stream_close_time = time.time()
 
+    async def _create_tracked_task(self, task):
+        """
+        Creates and tracks an asynchronous task.
+
+        This method creates a new task from the given coroutine, adds it to the set of active tasks,
+        and sets up a callback to remove the task from the set when it's completed.
+
+        Args:
+            task (Coroutine): The coroutine to be executed as a task.
+
+        Returns:
+            None
+
+        Note:
+            This method is used to keep track of all running tasks for potential cleanup or monitoring.
+        """
+        # Get the current timestamp
+        current_time = time.time()
+
+        # Create a new task from the given coroutine
+        new_task = asyncio.create_task(task)
+
+        # Add the task to the set of active tasks, along with its creation time
+        self._active_tasks.add((current_time, new_task))
+
+        # Set up a callback to remove the task from the set when it's done
+        new_task.add_done_callback(lambda _: self._active_tasks.discard((current_time, new_task)))
+
     async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
         """
         Sends a snapshot submission to the collector.
@@ -628,11 +651,8 @@ class GenericAsyncWorker(multiprocessing.Process):
                 if (current_time - self._last_stream_close_time) > self._stream_lifetime:
                     await self._close_stream()
 
-                await self.send_message(msg)
+                await self._create_tracked_task(self.send_message(msg))
 
-        except asyncio.TimeoutError:
-            self._logger.error('Timeout waiting for response, assuming success')
-            return
         except Exception as e:
             self._logger.opt(
                 exception=True,
@@ -677,12 +697,9 @@ class GenericAsyncWorker(multiprocessing.Process):
         else:
             try:
                 async with self.open_stream() as stream:
-                    await asyncio.wait_for(stream.send_message(msg), timeout=30)
+                    await stream.send_message(msg)
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
-            except asyncio.TimeoutError:
-                self._logger.error('Timeout waiting for response, assuming success')
-                return
             except Exception as e:
                 self._logger.opt(exception=settings.logs.trace_enabled).error(f'Failed to send message: {e}')
                 raise Exception(f'Failed to send message: {e}')
