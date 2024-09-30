@@ -698,7 +698,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         else:
             try:
                 async with self.open_stream() as stream:
-                    await stream.send_message(msg)
+                    await stream.send_message(msg, end=True)
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
             except Exception as e:
