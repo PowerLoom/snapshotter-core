@@ -10,7 +10,7 @@ logger = default_logger.bind(module='FileUtils')
 
 def read_json_file(
     file_path: str,
-    logger=default_logger,
+    logger=logger,
 ) -> dict:
     """
     Read a JSON file and return its content as a dictionary.
@@ -51,7 +51,7 @@ def write_json_file(
     directory: str,
     file_name: str,
     data: Any,
-    logger=default_logger,
+    logger=logger,
 ) -> None:
     """
     Write data to a JSON file at the specified directory with the specified file name.

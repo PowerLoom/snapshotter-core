@@ -1106,7 +1106,7 @@ class RabbitmqThreadedSelectLoopInteractor(object):
                     break
 
     def run(self):
-        self._logger = default_logger.bind(module='RabbitmqHelpers')
+        self._logger = logger
 
         while not self._stopping:
             self._connection = None

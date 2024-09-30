@@ -66,6 +66,9 @@ from snapshotter.utils.redis.redis_keys import submitted_unfinalized_snapshot_ci
 from snapshotter.utils.rpc import RpcHelper
 
 
+logger = default_logger.bind(module='GenericWorker')
+
+
 class EIPRequest(EIP712Struct):
     """
     Represents an EIP712 structured request for snapshot submission.
@@ -88,7 +91,7 @@ def web3_storage_retry_state_callback(retry_state: tenacity.RetryCallState):
         None
     """
     if retry_state and retry_state.outcome.failed:
-        default_logger.warning(
+        logger.warning(
             f'Encountered web3 storage upload exception: {retry_state.outcome.exception()} | args: {retry_state.args}, kwargs:{retry_state.kwargs}',
         )
 
@@ -104,7 +107,7 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
         None
     """
     if retry_state.attempt_number >= 3:
-        default_logger.error(
+        logger.error(
             'Txn signing worker failed after 3 attempts | Txn payload: {} | Signer: {}', retry_state.kwargs[
                 'txn_payload'
             ], retry_state.kwargs['signer_in_use'].address,
@@ -114,18 +117,18 @@ def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
             if 'nonce' in str(retry_state.outcome.exception()):
                 # Reassigning the signer object to ensure nonce is reset
                 retry_state.kwargs['signer_in_use'] = retry_state.args[0]._signer
-                default_logger.warning(
+                logger.warning(
                     'Tx signing worker attempt number {} result {} failed with nonce exception | Reset nonce and reassigned signer object: {} with nonce {} | Txn payload: {}',
                     retry_state.attempt_number, retry_state.outcome, retry_state.kwargs['signer_in_use'].address,
                     retry_state.kwargs['signer_in_use'].nonce, retry_state.kwargs['txn_payload'],
                 )
             else:
-                default_logger.warning(
+                logger.warning(
                     'Tx signing worker attempt number {} result {} failed with exception {} | Txn payload: {}',
                     retry_state.attempt_number, retry_state.outcome, retry_state.outcome.exception(
                     ), retry_state.kwargs['txn_payload'],
                 )
-        default_logger.warning(
+        logger.warning(
             'Tx signing worker {} attempt number {} result {} | Txn payload: {}',
             retry_state.kwargs['signer_in_use'].address, retry_state.attempt_number, retry_state.outcome,
             retry_state.kwargs['txn_payload'],
@@ -143,7 +146,7 @@ def ipfs_upload_retry_state_callback(retry_state: tenacity.RetryCallState):
         None
     """
     if retry_state and retry_state.outcome.failed:
-        default_logger.warning(
+        logger.warning(
             f'Encountered ipfs upload exception: {retry_state.outcome.exception()} | args: {retry_state.args}, kwargs:{retry_state.kwargs}',
         )
 
@@ -786,7 +789,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
         running the event loop until it is stopped.
         """
-        self._logger = default_logger.bind(module=self.name)
+        self._logger = logger
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,

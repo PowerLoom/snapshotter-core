@@ -46,8 +46,6 @@ def main():
     # Using bind to pass extra parameters to the logger, will show up in the {extra} field
     launcher_logger = default_logger.bind(
         module='SnapshotterProcessHub|Core|Launcher',
-        namespace=settings.namespace,
-        instance_id=settings.instance_id[:5],
     )
 
     # Initialize RabbitMQ exchanges and queues

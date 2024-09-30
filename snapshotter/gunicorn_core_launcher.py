@@ -1,84 +1,67 @@
-"""
-Gunicorn Core Launcher
-This module sets up and runs a Gunicorn server for the Core API application.
-It configures logging with our singleton logger, workers, and other server options based on environment variables.
-"""
-import logging
-import os
+from gunicorn.app.base import BaseApplication
+from gunicorn.glogging import Logger
 
-from snapshotter.core_api import app
-from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
-from snapshotter.utils.gunicorn import StandaloneApplication
-from snapshotter.utils.gunicorn import StubbedGunicornLogger
 
-# Configure logging level from environment variable, defaulting to DEBUG
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'DEBUG')
-
-# Set number of Gunicorn workers from environment variable, defaulting to 5
-WORKERS = int(os.environ.get('GUNICORN_WORKERS', '5'))
+logger = default_logger.bind(module='Gunicorn')
 
 
-class InterceptHandler(logging.Handler):
+class StubbedGunicornLogger(Logger):
     """
-    Custom logging handler to intercept standard logging and redirect to Loguru.
-
-    This handler captures logs from the standard logging module and forwards them
-    to Loguru, maintaining consistent logging across the application.
+    A custom logger for Gunicorn that uses the pre-defined loguru logger.
+    This logger sets up the error and access loggers using the existing loguru logger.
     """
 
-    def emit(self, record):
+    def setup(self, cfg):
         """
-        Emit a log record.
-
-        This method is called by the logging system to emit a log record. It translates
-        the standard log record into a Loguru log entry.
-
-        Args:
-            record (logging.LogRecord): The log record to be emitted.
+        Set up the logger with the pre-defined loguru logger and configure log levels.
+        :param cfg: Gunicorn configuration object
+        :type cfg: gunicorn.config.Config
         """
-        # Get corresponding Loguru level if it exists
-        try:
-            level = default_logger.level(record.levelname).name
-        except ValueError:
-            # If the level name is not recognized, use the numeric level
-            level = record.levelno
+        # Set up error logger
+        self.error_logger = logger.bind(name='gunicorn.error')
 
-        # Find caller's frame to get accurate line numbers
-        frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
-            frame = frame.f_back
-            depth += 1
-
-        # Log the message using Loguru with the appropriate context
-        default_logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        # Set up access logger
+        self.access_logger = logger.bind(name='gunicorn.access')
 
 
-def setup_logging():
+class StandaloneApplication(BaseApplication):
     """
-    Set up logging for the application.
+    A standalone Gunicorn application that can be run without a Gunicorn server.
+    This class allows for programmatic configuration and running of a Gunicorn server
+    with a given WSGI application.
     """
-    # Intercept standard logging
-    logging.basicConfig(handlers=[InterceptHandler()], level=0)
 
-    # Intercept uvicorn and gunicorn logging
-    for _logger in ['uvicorn', 'uvicorn.access', 'uvicorn.error', 'gunicorn', 'gunicorn.access', 'gunicorn.error']:
-        logging.getLogger(_logger).handlers = [InterceptHandler()]
+    def __init__(self, app, options=None):
+        """
+        Initialize the Gunicorn server with the given app and options.
+        :param app: The WSGI application to run
+        :type app: callable
+        :param options: Optional dictionary of configuration options
+        :type options: dict
+        """
+        self.options = options or {}
+        self.application = app
+        super().__init__()
 
+    def load_config(self):
+        """
+        Load the configuration for the Gunicorn server.
+        This function loads the configuration for the Gunicorn server from the options
+        provided by the user. It sets the configuration values in the `cfg` object.
+        """
+        config = {
+            key: value
+            for key, value in self.options.items()
+            if key in self.cfg.settings and value is not None
+        }
+        for key, value in config.items():
+            self.cfg.set(key.lower(), value)
 
-if __name__ == '__main__':
-    # Set up logging
-    setup_logging()
-
-    # Configure Gunicorn server options
-    options = {
-        'bind': f'{settings.core_api.host}:{settings.core_api.port}',
-        'workers': WORKERS,
-        'accesslog': '-',  # Log to stdout
-        'errorlog': '-',  # Log to stderr
-        'worker_class': 'uvicorn.workers.UvicornWorker',
-        'logger_class': StubbedGunicornLogger,
-    }
-
-    # Run the Gunicorn server with the configured options
-    StandaloneApplication(app, options).run()
+    def load(self):
+        """
+        Load the application and return it.
+        :return: The WSGI application
+        :rtype: callable
+        """
+        return self.application

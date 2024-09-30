@@ -27,6 +27,9 @@ from snapshotter.utils.exceptions import RPCException
 from snapshotter.utils.models.settings_model import RPCConfigBase
 
 
+logger = default_logger.bind(module='RpcHelper')
+
+
 def get_contract_abi_dict(abi):
     """
     Returns a dictionary of function signatures, inputs, outputs and full ABI for a given contract ABI.
@@ -123,7 +126,7 @@ def acquire_rpc_semaphore(fn):
             result = await fn(self, *args, **kwargs)
             return result
         except Exception as e:
-            default_logger.opt(exception=True).error('Error in asyncio semaphore acquisition decorator: {}', e)
+            logger.opt(exception=True).error('Error in asyncio semaphore acquisition decorator: {}', e)
             raise e
         finally:
             sem.release()
@@ -147,7 +150,7 @@ class RpcHelper(object):
         self._node_count = 0
         self._initialized = False
         self._sync_nodes_initialized = False
-        self._logger = default_logger.bind(module='RpcHelper')
+        self._logger = logger
         self._client = None
         self._async_transport = None
         self._semaphore = None

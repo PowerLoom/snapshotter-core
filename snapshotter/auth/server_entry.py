@@ -19,7 +19,7 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
 
 # Setup logging
-api_logger = default_logger.bind(module=__name__)
+api_logger = default_logger.bind(module='AuthAPI')
 
 # Setup CORS origins
 origins = ['*']

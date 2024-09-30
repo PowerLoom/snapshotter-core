@@ -4,7 +4,6 @@ This module sets up and launches a Gunicorn server for the authentication servic
 It configures logging using the singleton logger, sets up workers, and initializes the application.
 """
 import logging
-import os
 
 from snapshotter.auth.conf import auth_settings
 from snapshotter.auth.server_entry import app
@@ -12,8 +11,8 @@ from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.gunicorn import StandaloneApplication
 from snapshotter.utils.gunicorn import StubbedGunicornLogger
 
+gunicorn_logger = default_logger.bind(module='AuthAPI')
 # Configuration variables from environment
-LOG_LEVEL = os.environ.get('LOG_LEVEL', 'DEBUG')
 WORKERS = int(os.environ.get('GUNICORN_WORKERS', '5'))
 
 
@@ -37,7 +36,7 @@ class InterceptHandler(logging.Handler):
         """
         # Get corresponding Loguru level if it exists
         try:
-            level = default_logger.level(record.levelname).name
+            level = gunicorn_logger.level(record.levelname).name
         except ValueError:
             # If the level name is not recognized, use the numeric level
             level = record.levelno
@@ -49,15 +48,13 @@ class InterceptHandler(logging.Handler):
             depth += 1
 
         # Log the message using Loguru with the appropriate context
-        default_logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+        gunicorn_logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
 
 
 def setup_logging():
     """
     Set up logging for the application.
     """
-    # Set log level for default_logger
-    default_logger.level(LOG_LEVEL)
 
     # Intercept standard logging
     logging.basicConfig(handlers=[InterceptHandler()], level=0)
