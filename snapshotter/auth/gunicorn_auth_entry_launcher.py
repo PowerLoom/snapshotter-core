@@ -4,6 +4,7 @@ This module sets up and launches a Gunicorn server for the authentication servic
 It configures logging using the singleton logger, sets up workers, and initializes the application.
 """
 import logging
+import os
 
 from snapshotter.auth.conf import auth_settings
 from snapshotter.auth.server_entry import app
