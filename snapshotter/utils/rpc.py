@@ -5,6 +5,7 @@ from typing import Union
 
 import eth_abi
 import tenacity
+from aiolimiter import AsyncLimiter
 from eth_abi.codec import ABICodec
 from eth_utils import keccak
 from hexbytes import HexBytes
@@ -151,6 +152,7 @@ class RpcHelper(object):
         self._client = None
         self._async_transport = None
         self._semaphore = None
+        self._rate_limiter = None
 
     async def _init_http_clients(self):
         """
@@ -201,6 +203,11 @@ class RpcHelper(object):
         """
         if not self._initialized:
             self._semaphore = asyncio.BoundedSemaphore(value=settings.rpc.semaphore_value)
+
+            # Initialize rate limiter
+            requests_per_second = self._rpc_settings.rate_limit.requests_per_second
+            self._rate_limiter = AsyncLimiter(requests_per_second)
+
             if not self._sync_nodes_initialized:
                 self._logger.debug('Sync nodes not initialized, initializing...')
                 self.sync_init()
@@ -298,6 +305,10 @@ class RpcHelper(object):
             next_node_idx, retry_state.outcome.exception(),
         )
 
+    async def _rate_limited_call(self, coroutine):
+        async with self._rate_limiter:
+            return await coroutine
+
     @acquire_rpc_semaphore
     async def get_current_block_number(self, redis_conn=None):
         """
@@ -324,7 +335,7 @@ class RpcHelper(object):
             web3_provider = node['web3_client_async']
 
             try:
-                current_block = await web3_provider.eth.block_number
+                current_block = await self._rate_limited_call(web3_provider.eth.block_number)
             except Exception as e:
                 exc = RPCException(
                     request='get_current_block_number',
@@ -365,8 +376,8 @@ class RpcHelper(object):
             node = self._nodes[node_idx]
 
             try:
-                tx_receipt_details = await node['web3_client_async'].eth.get_transaction_receipt(
-                    tx_hash,
+                tx_receipt_details = await self._rate_limited_call(
+                    node['web3_client_async'].eth.get_transaction_receipt(tx_hash),
                 )
             except Exception as e:
                 exc = RPCException(
@@ -410,7 +421,7 @@ class RpcHelper(object):
             web3_provider = node['web3_client_async']
 
             try:
-                current_block = await web3_provider.eth.block_number
+                current_block = await self._rate_limited_call(web3_provider.eth.block_number)
             except Exception as e:
                 exc = RPCException(
                     request='get_current_block_number',
@@ -455,7 +466,9 @@ class RpcHelper(object):
                     abi=abi,
                 )
                 web3_tasks = [
-                    contract_obj.functions[task[0]](*task[1]).call() for task in tasks
+                    self._rate_limited_call(
+                        contract_obj.functions[task[0]](*task[1]).call(),
+                    ) for task in tasks
                 ]
                 response = await asyncio.gather(*web3_tasks)
                 return response
@@ -509,7 +522,9 @@ class RpcHelper(object):
             node = self._nodes[node_idx]
             rpc_url = node.get('rpc_url')
             try:
-                response = await self._client.post(url=rpc_url, json=rpc_query)
+                response = await self._rate_limited_call(
+                    self._client.post(url=rpc_url, json=rpc_query),
+                )
                 response_data = response.json()
             except Exception as e:
                 exc = RPCException(
@@ -827,8 +842,8 @@ class RpcHelper(object):
                 'topics': topics,
             }
             try:
-                event_log = await web3_provider.eth.get_logs(
-                    event_log_query,
+                event_log = await self._rate_limited_call(
+                    web3_provider.eth.get_logs(event_log_query),
                 )
                 codec: ABICodec = web3_provider.codec
                 all_events = []
