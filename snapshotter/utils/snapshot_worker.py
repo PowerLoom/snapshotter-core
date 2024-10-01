@@ -453,5 +453,4 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
 if __name__ == '__main__':
     snapshot_worker = SnapshotAsyncWorker('SnapshotAsyncWorker')
-    snapshot_worker.start()
-    snapshot_worker.join()
+    snapshot_worker.run()

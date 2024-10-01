@@ -480,5 +480,4 @@ class EventDetectorProcess(multiprocessing.Process):
 
 if __name__ == '__main__':
     event_detector = EventDetectorProcess('SystemEventDetector')
-    event_detector.start()
-    event_detector.join()
+    event_detector.run()

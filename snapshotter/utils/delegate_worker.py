@@ -248,5 +248,4 @@ class DelegateAsyncWorker(GenericAsyncWorker):
 
 if __name__ == '__main__':
     delegate_worker = DelegateAsyncWorker('DelegateAsyncWorker')
-    delegate_worker.start()
-    delegate_worker.join()
+    delegate_worker.run()

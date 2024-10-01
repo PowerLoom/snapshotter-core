@@ -391,5 +391,4 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
 if __name__ == '__main__':
     aggregation_worker = AggregationAsyncWorker('AggregationAsyncWorker')
-    aggregation_worker.start()
-    aggregation_worker.join()
+    aggregation_worker.run()
