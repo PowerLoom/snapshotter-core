@@ -203,7 +203,7 @@ class RpcHelper(object):
 
             # Initialize rate limiter
             requests_per_second = self._rpc_settings.rate_limit.requests_per_second
-            self._rate_limiter = AsyncLimiter(requests_per_second)
+            self._rate_limiter = AsyncLimiter(requests_per_second, 1)
 
             if not self._sync_nodes_initialized:
                 self._logger.debug('Sync nodes not initialized, initializing...')
@@ -605,17 +605,25 @@ class RpcHelper(object):
             response_data = await self._make_rpc_jsonrpc_call(rpc_query)
 
             rpc_response = []
-            if not isinstance(response_data, list) and response_data is not None and isinstance(response_data, dict):
-                response_data = [response_data]
-                for response in response_data:
-                    if 'result' in response:
-                        eth_balance = response['result']
-                        rpc_response.append(eth_balance)
-                    else:
-                        rpc_response.append(None)
+            if isinstance(response_data, list):
+                response = response_data
+            elif response_data is not None and isinstance(response_data, dict):
+                response = [response_data]
+            for result in response:
+                if 'result' in result:
+                    eth_balance = result['result']
+                    eth_balance = int(eth_balance, 16)
+                    rpc_response.append(eth_balance)
             return rpc_response
         except Exception as e:
-            raise e
+            exc = RPCException(
+                request=rpc_query,
+                response=None,
+                underlying_exception=e,
+                extra_info=f'RPC_BATCH_ETH_GET_BALANCE_ON_BLOCK_RANGE_ERROR: {str(e)}',
+            )
+            self._logger.trace('Error in batch_eth_get_balance_on_block_range, error {}', str(exc))
+            raise exc
 
     async def batch_eth_call_on_block_range(
         self,
