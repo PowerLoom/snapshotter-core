@@ -155,6 +155,11 @@ class ProcessorDistributor(multiprocessing.Process):
             self._project_type_config_mapping[project_config.project_type] = project_config
             for preload_task in project_config.preload_tasks:
                 self._all_preload_tasks.add(preload_task)
+
+        self._aggregator_config_mapping = dict()
+        for agg_config in aggregator_config:
+            self._aggregator_config_mapping[agg_config.project_type] = agg_config
+
         self._logger.debug('All preload tasks by string ID during init: {}', self._all_preload_tasks)
         self._last_epoch_processing_health_check = 0
         self._preloader_compute_mapping = dict()
@@ -699,6 +704,51 @@ class ProcessorDistributor(multiprocessing.Process):
 
         return set([msg.projectId.lower() for msg in pending_project_msgs if msg.allowed])
 
+    def _fetch_base_project_list(self, project_type: str) -> List[str]:
+        """
+        Fetches the base project list for the given project type.
+
+        Args:
+            project_type (str): The project type.
+
+        Returns:
+            List[str]: The base project list.
+        """
+        if project_type in self._project_type_config_mapping:
+            return self._project_type_config_mapping[project_type].projects
+        # another sigle based aggregate project
+        else:
+            base_project_type = self._aggregator_config_mapping[project_type].base_project_type
+            return self._fetch_base_project_list(base_project_type)
+
+    def _gen_projects_to_wait_for(self, project_type: str) -> List[str]:
+        """
+        Generates the projects to wait for based on the project type.
+
+        Args:
+            project_type (str): The project type.
+
+        Returns:
+            List[str]: The projects to wait for.
+        """
+        aggregator_config = self._aggregator_config_mapping[project_type]
+
+        if aggregator_config.aggregate_on == AggregateOn.single_project:
+            base_project_type = aggregator_config.base_project_type
+            return set([f'{project_type}:{project}:{settings.namespace}' for project in self._fetch_base_project_list(base_project_type)])
+        else:
+            project_types_to_wait_for = aggregator_config.project_types_to_wait_for
+            projects_to_wait_for = set()
+            for project_type in project_types_to_wait_for:
+                if project_type in self._project_type_config_mapping:
+                    base_project_config = self._project_type_config_mapping[project_type]
+                    projects_to_wait_for.update(
+                        [f'{project_type}:{project}:{settings.namespace}' for project in base_project_config.projects],
+                    )
+                else:
+                    projects_to_wait_for.update(self._gen_projects_to_wait_for(project_type))
+            return projects_to_wait_for
+
     async def _update_all_projects(self, message: IncomingMessage):
         """
         Updates all projects based on the incoming message.
@@ -800,8 +850,8 @@ class ProcessorDistributor(multiprocessing.Process):
             for config in aggregator_config:
                 task_type = config.project_type
                 if config.aggregate_on == AggregateOn.single_project:
-                    if config.filters.projectId not in process_unit.projectId:
-                        self._logger.trace(f'projectId mismatch {process_unit.projectId} {config.filters.projectId}')
+                    if config.base_project_type not in process_unit.projectId:
+                        self._logger.trace(f'projectId mismatch {process_unit.projectId} {config.base_project_type}')
                         continue
 
                     rabbitmq_publish_tasks.append(
@@ -812,7 +862,8 @@ class ProcessorDistributor(multiprocessing.Process):
                         ),
                     )
                 elif config.aggregate_on == AggregateOn.multi_project:
-                    if process_unit.projectId not in config.projects_to_wait_for:
+                    projects_to_wait_for = self._gen_projects_to_wait_for(config.project_type)
+                    if process_unit.projectId not in projects_to_wait_for:
                         self._logger.trace(
                             f'projectId not required for {config.project_type}: {process_unit.projectId}',
                         )
@@ -849,7 +900,7 @@ class ProcessorDistributor(multiprocessing.Process):
                             event_project_ids.add(event.projectId)
                             finalized_messages.append(event)
 
-                    if event_project_ids == set(config.projects_to_wait_for):
+                    if event_project_ids == projects_to_wait_for:
                         self._logger.info(
                             f'All project snapshots accumulated for epoch {process_unit.epochId} against multi aggregate project type {config.project_type}, aggregating',
                         )
@@ -878,7 +929,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     else:
                         self._logger.trace(
                             f'Not all projects present for epoch {process_unit.epochId} against multi aggregate project type {config.project_type},'
-                            f' {len(set(config.projects_to_wait_for)) - len(event_project_ids)} missing',
+                            f' {len(projects_to_wait_for) - len(event_project_ids)} missing',
                         )
         await asyncio.gather(*rabbitmq_publish_tasks, return_exceptions=True)
 

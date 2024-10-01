@@ -46,11 +46,8 @@ const appConfigs = [
       GUNICORN_WORKERS: 1,
     },
   }),
-  createAppConfig("health-manager", "snapshotter.health_manager", {
-    cron_restart: '0 0 * * *', // Every day at midnight
-  }),
   createAppConfig("processor-distributor", "snapshotter.processor_distributor", {
-    cron_restart: '0 3 * * *', // Every day at 3 AM
+    cron_restart: '0 0 * * *', // Every day at 3 AM
   }),
   createAppConfig("system-event-detector", "snapshotter.system_event_detector"),
   createWorkerConfig("delegate-worker", "snapshotter.utils.delegate_worker",
