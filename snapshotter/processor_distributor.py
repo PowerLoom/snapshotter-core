@@ -6,6 +6,7 @@ import resource
 import sys
 import time
 from collections import defaultdict
+from functools import lru_cache
 from functools import partial
 from signal import SIGINT
 from signal import signal
@@ -721,6 +722,7 @@ class ProcessorDistributor(multiprocessing.Process):
             base_project_type = self._aggregator_config_mapping[project_type].base_project_type
             return self._fetch_base_project_list(base_project_type)
 
+    @lru_cache(maxsize=None)
     def _gen_projects_to_wait_for(self, project_type: str) -> List[str]:
         """
         Generates the projects to wait for based on the project type.
