@@ -153,20 +153,20 @@ sed -i'.backup' "s#https://telegram-reporting-url#$telegram_reporting_url#" conf
 sed -i'.backup' "s#telegram-chat-id#$telegram_chat_id#" config/settings.json
 
 sed -i'.backup' "s#redis-host#$REDIS_HOST#" config/settings.json
-sed -i'.backup' "s#redis-port#$REDIS_PORT#" config/settings.json
+sed -i'.backup' "s#\"redis-port\"#$REDIS_PORT#" config/settings.json
 if [ "$REDIS_PASSWORD" ]; then
-    sed -i'.backup' "s#redis-password#\"$REDIS_PASSWORD\"#" config/settings.json
+    sed -i'.backup' "s#\"redis-password\"#\"$REDIS_PASSWORD\"#" config/settings.json
 else
-    sed -i'.backup' "s#redis-password#null#" config/settings.json
+    sed -i'.backup' "s#\"redis-password\"#null#" config/settings.json
 fi
 
 # Add the same replacements for auth_settings.json
 sed -i'.backup' "s#redis-host#$REDIS_HOST#" config/auth_settings.json
-sed -i'.backup' "s#redis-port#$REDIS_PORT#" config/auth_settings.json
+sed -i'.backup' "s#\"redis-port\"#$REDIS_PORT#" config/auth_settings.json
 if [ "$REDIS_PASSWORD" ]; then
-    sed -i'.backup' "s#redis-password#\"$REDIS_PASSWORD\"#" config/auth_settings.json
+    sed -i'.backup' "s#\"redis-password\"#\"$REDIS_PASSWORD\"#" config/auth_settings.json
 else
-    sed -i'.backup' "s#redis-password#null#" config/auth_settings.json
+    sed -i'.backup' "s#\"redis-password\"#null#" config/auth_settings.json
 fi
 
 

@@ -46,7 +46,7 @@ from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.data_utils import get_snapshot_submision_window
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
@@ -64,6 +64,9 @@ from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 from snapshotter.utils.redis.redis_keys import submitted_unfinalized_snapshot_cids
 from snapshotter.utils.rpc import RpcHelper
+
+
+logger = default_logger.bind(module='GenericWorker')
 
 
 class EIPRequest(EIP712Struct):
@@ -154,13 +157,12 @@ class GenericAsyncWorker(multiprocessing.Process):
     """
     _active_tasks: Set[asyncio.Task]
 
-    def __init__(self, name, signer_idx, **kwargs):
+    def __init__(self, name, **kwargs):
         """
         Initializes a GenericAsyncWorker instance.
 
         Args:
             name (str): The name of the worker.
-            signer_idx (int): The index of the signer to use from the list in settings.
             **kwargs: Additional keyword arguments to pass to the superclass constructor.
         """
         self._core_rmq_consumer: asyncio.Task
@@ -170,7 +172,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         super(GenericAsyncWorker, self).__init__(name=name, **kwargs)
         self._protocol_state_contract = None
         self._qos = 1
-        self._signer_index = signer_idx
         self._rate_limiting_lua_scripts = None
 
         self.protocol_state_contract_address = Web3.to_checksum_address(settings.protocol_state.address)
@@ -190,8 +191,11 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._initialized = False
         # Task tracking
         self._active_tasks: Set[asyncio.Task] = set()
-        self._task_timeout = 300  # 5 minutes
-        self._task_cleanup_interval = 60  # 1 minute
+        self._task_timeout = settings.async_task_config.task_timeout
+        self._task_cleanup_interval = settings.async_task_config.task_cleanup_interval
+
+        self._last_stream_close_time = 0
+        self._stream_lifetime = 30  # Close stream every 30 seconds
 
     def _signal_handler(self, signum, frame):
         """
@@ -241,6 +245,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         stop=stop_after_attempt(5),
         retry=tenacity.retry_if_not_exception_type(IPFSAsyncClientError),
         after=ipfs_upload_retry_state_callback,
+        reraise=True,
     )
     async def _upload_to_ipfs(self, snapshot: bytes, _ipfs_writer_client: AsyncIPFSClient):
         """
@@ -439,7 +444,7 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         # Upload to web3 storage
         if storage_flag:
-            asyncio.ensure_future(self._upload_web3_storage(snapshot_bytes))
+            await self._create_tracked_task(self._upload_web3_storage(snapshot_bytes))
 
     async def _rabbitmq_consumer(self, loop):
         """
@@ -560,18 +565,48 @@ class GenericAsyncWorker(multiprocessing.Process):
         finally:
             self._stream = None
 
-    async def _cancel_stream(self):
+    async def _close_stream(self):
         """
-        Cancels the current gRPC stream if it exists.
+        Closes the gRPC stream and logs the response.
         """
-        # TODO: check if this is needed
-        if self._stream is not None:
+        if self._stream:
             try:
-                await self._stream.cancel()
-            except:
-                self._logger.debug('Error cancelling stream, continuing...')
-            self._logger.debug('Stream cancelled due to inactivity.')
-            self._stream = None
+                await self._stream.end()
+                self._logger.info('Closed stream')
+            except Exception as e:
+                self._logger.error(f'Error closing stream: {e}')
+            finally:
+                self._stream = None
+
+        self._last_stream_close_time = time.time()
+
+    async def _create_tracked_task(self, task):
+        """
+        Creates and tracks an asynchronous task.
+
+        This method creates a new task from the given coroutine, adds it to the set of active tasks,
+        and sets up a callback to remove the task from the set when it's completed.
+
+        Args:
+            task (Coroutine): The coroutine to be executed as a task.
+
+        Returns:
+            None
+
+        Note:
+            This method is used to keep track of all running tasks for potential cleanup or monitoring.
+        """
+        # Get the current timestamp
+        current_time = time.time()
+
+        # Create a new task from the given coroutine
+        new_task = asyncio.create_task(task)
+
+        # Add the task to the set of active tasks, along with its creation time
+        self._active_tasks.add((current_time, new_task))
+
+        # Set up a callback to remove the task from the set when it's done
+        new_task.add_done_callback(lambda _: self._active_tasks.discard((current_time, new_task)))
 
     async def _send_submission_to_collector(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
         """
@@ -610,9 +645,15 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         try:
             if epoch_id == 0:
+                # send with timeout
                 await self.send_message(msg, simulation=True)
             else:
-                await self.send_message(msg)
+                current_time = time.time()
+                if (current_time - self._last_stream_close_time) > self._stream_lifetime:
+                    await self._close_stream()
+
+                await self._create_tracked_task(self.send_message(msg))
+
         except Exception as e:
             self._logger.opt(
                 exception=True,
@@ -657,10 +698,11 @@ class GenericAsyncWorker(multiprocessing.Process):
         else:
             try:
                 async with self.open_stream() as stream:
-                    await stream.send_message(msg)
+                    await stream.send_message(msg, end=True)
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
             except Exception as e:
+                self._logger.opt(exception=settings.logs.trace_enabled).error(f'Failed to send message: {e}')
                 raise Exception(f'Failed to send message: {e}')
 
     async def _init_grpc(self):
@@ -745,7 +787,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
         running the event loop until it is stopped.
         """
-        self._logger = logger.bind(module=self.name)
+        self._logger = logger
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(
             resource.RLIMIT_NOFILE,

@@ -3,7 +3,7 @@ from pydantic import ValidationError
 from redis import asyncio as aioredis
 
 from snapshotter.utils.callback_helpers import GenericDelegateProcessor
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.helper_functions import attribute_dict_to_dict
 from snapshotter.utils.models.message_models import PowerloomDelegateTxReceiptWorkerResponseMessage
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
@@ -24,7 +24,7 @@ class TxReceiptProcessor(GenericDelegateProcessor):
 
         Sets up a logger instance for this processor.
         """
-        self._logger = logger.bind(module='TxReceiptPreloader')
+        self._logger = default_logger.bind(module='TxReceiptPreloader')
 
     async def compute(
             self,

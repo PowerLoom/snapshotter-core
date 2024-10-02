@@ -1,51 +1,80 @@
 """
 Gunicorn Auth Entry Launcher
-
 This module sets up and launches a Gunicorn server for the authentication service.
-It configures logging, sets up workers, and initializes the application.
+It configures logging using the singleton logger, sets up workers, and initializes the application.
 """
-
 import logging
 import os
 
 from snapshotter.auth.conf import auth_settings
 from snapshotter.auth.server_entry import app
-from snapshotter.utils.gunicorn import InterceptHandler
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.gunicorn import StandaloneApplication
 from snapshotter.utils.gunicorn import StubbedGunicornLogger
 
+gunicorn_logger = default_logger.bind(module='AuthAPI')
 # Configuration variables from environment
-JSON_LOGS = True if os.environ.get('JSON_LOGS', '0') == '1' else False
-LOG_LEVEL = logging.getLevelName(os.environ.get('LOG_LEVEL', 'DEBUG'))
 WORKERS = int(os.environ.get('GUNICORN_WORKERS', '5'))
+
+
+class InterceptHandler(logging.Handler):
+    """
+    Custom logging handler to intercept standard logging and redirect to Loguru.
+
+    This handler captures logs from the standard logging module and forwards them
+    to Loguru, maintaining consistent logging across the application.
+    """
+
+    def emit(self, record):
+        """
+        Emit a log record.
+
+        This method is called by the logging system to emit a log record. It translates
+        the standard log record into a Loguru log entry.
+
+        Args:
+            record (logging.LogRecord): The log record to be emitted.
+        """
+        # Get corresponding Loguru level if it exists
+        try:
+            level = gunicorn_logger.level(record.levelname).name
+        except ValueError:
+            # If the level name is not recognized, use the numeric level
+            level = record.levelno
+
+        # Find the caller's frame to get accurate line numbers
+        frame, depth = logging.currentframe(), 2
+        while frame.f_code.co_filename == logging.__file__:
+            frame = frame.f_back
+            depth += 1
+
+        # Log the message using Loguru with the appropriate context
+        gunicorn_logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
+
+def setup_logging():
+    """
+    Set up logging for the application.
+    """
+
+    # Intercept standard logging
+    logging.basicConfig(handlers=[InterceptHandler()], level=0)
+
+    # Intercept uvicorn and gunicorn logging
+    for _logger in ['uvicorn', 'uvicorn.access', 'uvicorn.error', 'gunicorn', 'gunicorn.access', 'gunicorn.error']:
+        logging.getLogger(_logger).handlers = [InterceptHandler()]
 
 
 if __name__ == '__main__':
     # Set up logging
-    intercept_handler = InterceptHandler()
-    logging.root.setLevel(LOG_LEVEL)
-
-    # Configure logging for various modules
-    seen = set()
-    for name in [
-        *logging.root.manager.loggerDict.keys(),
-        'gunicorn',
-        'gunicorn.access',
-        'gunicorn.error',
-        'uvicorn',
-        'uvicorn.access',
-        'uvicorn.error',
-    ]:
-        if name not in seen:
-            seen.add(name.split('.')[0])
-            logging.getLogger(name).handlers = [intercept_handler]
+    setup_logging()
 
     # Gunicorn server options
     options = {
         'bind': f'{auth_settings.bind.host}:{auth_settings.bind.port}',
         'workers': WORKERS,
         'accesslog': '-',  # Log to stdout
-        'errorlog': '-',   # Log to stderr
+        'errorlog': '-',  # Log to stderr
         'worker_class': 'uvicorn.workers.UvicornWorker',
         'logger_class': StubbedGunicornLogger,
     }

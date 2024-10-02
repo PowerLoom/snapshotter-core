@@ -1,19 +1,16 @@
 import asyncio
 import json
 
-from aiohttp import ClientSession
-from aiohttp import ClientTimeout
-from aiohttp import TCPConnector
 from eth_utils.address import to_checksum_address
-from web3 import AsyncHTTPProvider
 from web3 import HTTPProvider
 from web3 import Web3
-from web3.eth import AsyncEth
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.rpc import RpcHelper
+
+test_logger = default_logger.bind(module='test_web3_async_call')
 
 
 async def test_web3_async_call():
@@ -62,4 +59,4 @@ if __name__ == '__main__':
         asyncio.get_event_loop().run_until_complete(test_web3_async_call())
     except Exception as e:
         # Log any exceptions that occur during execution
-        logger.opt(exception=True).error('exception: {}', e)
+        test_logger.opt(exception=True).error('exception: {}', e)

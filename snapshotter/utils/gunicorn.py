@@ -1,18 +1,17 @@
 import logging
-import os
 
 from gunicorn.app.base import BaseApplication
 from gunicorn.glogging import Logger
 
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 
-# Set the log level based on the environment variable 'LOG_LEVEL', defaulting to 'DEBUG'
-LOG_LEVEL = logging.getLevelName(os.environ.get('LOG_LEVEL', 'DEBUG'))
+
+logger = default_logger.bind(module='Gunicorn')
 
 
 class InterceptHandler(logging.Handler):
     """
-    A custom logging handler that intercepts log records and forwards them to Loguru logger.
+    A custom logging handler that intercepts log records and forwards them to Loguru default_logger.
 
     This handler is designed to bridge the gap between Python's standard logging
     and the Loguru logger, allowing for seamless integration of both logging systems.
@@ -49,8 +48,7 @@ class StubbedGunicornLogger(Logger):
     A custom logger for Gunicorn that stubs out the error and access loggers.
 
     This logger sets up a NullHandler for both the error and access loggers, effectively
-    disabling them. It also sets the log level to the value of LOG_LEVEL, which is defined
-    elsewhere in the codebase.
+    disabling them.
     """
 
     def setup(self, cfg):
@@ -61,18 +59,14 @@ class StubbedGunicornLogger(Logger):
         :type cfg: gunicorn.config.Config
         """
         handler = logging.NullHandler()
-        
+
         # Set up error logger
         self.error_logger = logging.getLogger('gunicorn.error')
         self.error_logger.addHandler(handler)
-        
+
         # Set up access logger
         self.access_logger = logging.getLogger('gunicorn.access')
         self.access_logger.addHandler(handler)
-        
-        # Set log levels
-        self.error_log.setLevel(LOG_LEVEL)
-        self.access_log.setLevel(LOG_LEVEL)
 
 
 class StandaloneApplication(BaseApplication):

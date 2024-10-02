@@ -1,7 +1,7 @@
 from redis import asyncio as aioredis
 
 from snapshotter.utils.callback_helpers import GenericPreloader
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.rpc import RpcHelper
 from snapshotter.utils.snapshot_utils import get_block_details_in_block_range
@@ -10,7 +10,7 @@ from snapshotter.utils.snapshot_utils import get_block_details_in_block_range
 class BlockDetailsPreloader(GenericPreloader):
     """
     A preloader class for fetching and caching block details within a specified epoch range.
-    
+
     This class extends GenericPreloader and implements methods to compute and cleanup
     block details for a given epoch range.
     """
@@ -19,7 +19,7 @@ class BlockDetailsPreloader(GenericPreloader):
         """
         Initialize the BlockDetailsPreloader with a logger.
         """
-        self._logger = logger.bind(module='BlockDetailsPreloader')
+        self._logger = default_logger.bind(module='BlockDetailsPreloader')
 
     async def compute(
             self,

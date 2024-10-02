@@ -132,6 +132,12 @@ class Logs(BaseModel):
     write_to_files: bool
 
 
+class AsyncTaskConfig(BaseModel):
+    """Async task configuration model."""
+    task_timeout: int
+    task_cleanup_interval: int
+
+
 class EventContract(BaseModel):
     """Event contract configuration model."""
     address: str
@@ -207,6 +213,7 @@ class Settings(BaseModel):
     core_api: CoreAPI
     instance_id: str
     slot_id: int
+    async_task_config: AsyncTaskConfig
     rpc: RPCConfigFull
     local_collector_port: int
     rlimit: RLimit
@@ -265,8 +272,8 @@ class AggregationConfig(BaseModel):
     """Aggregation configuration model."""
     project_type: str
     aggregate_on: AggregateOn
-    filters: Optional[AggregateFilterConfig]
-    projects_to_wait_for: Optional[List[str]]
+    base_project_type: Optional[str]
+    project_types_to_wait_for: Optional[List[str]]
     processor: ProcessorConfig
 
 

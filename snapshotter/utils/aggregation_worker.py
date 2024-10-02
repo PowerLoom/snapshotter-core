@@ -243,18 +243,14 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                         ).json(),
                     },
                 )
-                commit_task = asyncio.create_task(
-                    self._commit_payload(
-                        task_type=task_type,
-                        project_id=project_id,
-                        epoch=msg_obj,
-                        snapshot=snapshot,
-                        storage_flag=settings.web3storage.upload_aggregates,
-                        _ipfs_writer_client=self._ipfs_writer_client,
-                    ),
+                await self._commit_payload(
+                    task_type=task_type,
+                    project_id=project_id,
+                    epoch=msg_obj,
+                    snapshot=snapshot,
+                    storage_flag=settings.web3storage.upload_aggregates,
+                    _ipfs_writer_client=self._ipfs_writer_client,
                 )
-                self._active_tasks.add(commit_task)
-                commit_task.add_done_callback(lambda _: self._active_tasks.discard(commit_task))
             self._logger.debug(
                 'Updated epoch processing status in aggregation worker for project {} for transition {}',
                 project_id, SnapshotterStates.SNAPSHOT_BUILD.value,
@@ -391,3 +387,8 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             await self._init_project_calculation_mapping()
             await self._init_ipfs_client()
             await self.init()
+
+
+if __name__ == '__main__':
+    aggregation_worker = AggregationAsyncWorker('AggregationAsyncWorker')
+    aggregation_worker.run()
