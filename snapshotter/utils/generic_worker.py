@@ -807,18 +807,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         finally:
             ev_loop.close()
 
-    async def cancel_and_wait(self, task, msg=None):
-        task.cancel(msg)
-        try:
-            await task
-        except asyncio.CancelledError:
-            if asyncio.current_task().cancelling() == 0:
-                raise
-            else:
-                return  # this is the only non-exceptional return
-        else:
-            raise RuntimeError('Cancelled task did not end with an exception')
-
     async def _cleanup_tasks(self):
         """
         Periodically clean up completed or timed-out tasks.
@@ -834,5 +822,5 @@ class GenericAsyncWorker(multiprocessing.Process):
                     self._logger.warning(
                         f'Task {task} timed out. Cancelling..., current_time: {current_time}, start_time: {task_start_time}',
                     )
-                    await self.cancel_and_wait(task)
+                    task.cancel()
                     self._active_tasks.discard((task_start_time, task))
