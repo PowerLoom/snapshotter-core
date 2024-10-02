@@ -15,6 +15,30 @@ from snapshotter.utils.rpc import get_contract_abi_dict
 from snapshotter.utils.rpc import get_event_sig_and_abi
 from snapshotter.utils.rpc import RpcHelper
 
+"""
+RPC Helper Test Suite
+
+This test suite is designed to test the RpcHelper class, which provides various methods for interacting with Ethereum nodes via RPC calls.
+
+Requirements:
+- A local development Hardhat node is required to run these tests.
+
+To run the tests:
+1. Ensure you have a local Hardhat node running (typically on http://127.0.0.1:8545).
+2. Run the tests using Poetry with the following command:
+   poetry run python -m pytest snapshotter/tests/rpc_helper_test.py
+
+What these tests cover:
+- Initialization of RpcHelper
+- Basic RPC calls (e.g., getting current block number, transaction receipts)
+- Contract interactions (function calls)
+- Batch RPC calls (e.g., getting balances or calling functions across a range of blocks)
+- Event log retrieval
+- Rate limiting behavior
+
+Note: These tests use a custom RPC configuration (TEST_RPC_CONFIG) that points to the local Hardhat node. Ensure your local node matches this configuration.
+"""
+
 # Custom RPC config for testing with Hardhat
 
 RATE_LIMIT_OVERRIDE = RateLimitConfig(
