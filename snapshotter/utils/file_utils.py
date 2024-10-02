@@ -2,16 +2,15 @@ import json
 import os
 from typing import Any
 
-from loguru import logger
-
 from snapshotter.settings.config import settings
+from snapshotter.utils.default_logger import default_logger
 
-default_logger = logger.bind(module='Powerloom|FileUtils')
+logger = default_logger.bind(module='FileUtils')
 
 
 def read_json_file(
     file_path: str,
-    logger: logger = default_logger,
+    logger=logger,
 ) -> dict:
     """
     Read a JSON file and return its content as a dictionary.
@@ -35,11 +34,11 @@ def read_json_file(
         # Attempt to open the file
         with open(file_path, 'r', encoding='utf-8') as f_:
             json_data = json.load(f_)
-            
+
             # Handle cases where the JSON might be nested in strings
             while not isinstance(json_data, dict) and isinstance(json_data, str):
                 json_data = json.loads(json_data)
-            
+
             return json_data
     except Exception as exc:
         logger.warning(f'Unable to open or read the {file_path} file')
@@ -52,7 +51,7 @@ def write_json_file(
     directory: str,
     file_name: str,
     data: Any,
-    logger: logger = logger,
+    logger=logger,
 ) -> None:
     """
     Write data to a JSON file at the specified directory with the specified file name.
@@ -70,12 +69,12 @@ def write_json_file(
         None
     """
     file_path = os.path.join(directory, file_name)
-    
+
     try:
         # Create directory if it doesn't exist
         if not os.path.exists(directory):
             os.makedirs(directory)
-        
+
         # Write data to file
         with open(file_path, 'w', encoding='utf-8') as f_:
             json.dump(data, f_, ensure_ascii=False, indent=4)
@@ -100,12 +99,12 @@ def write_bytes_to_file(directory: str, file_name: str, data: bytes) -> None:
         None
     """
     file_path = os.path.join(directory, file_name)
-    
+
     try:
         # Create directory if it doesn't exist
         if not os.path.exists(directory):
             os.makedirs(directory)
-        
+
         # Write bytes to file
         with open(file_path, 'wb') as file_obj:
             bytes_written = file_obj.write(data)

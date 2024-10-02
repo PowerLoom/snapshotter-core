@@ -5,11 +5,11 @@ from functools import wraps
 import web3.datastructures
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.message_models import EpochBase
 
 # Setup logging
-logger = logger.bind(module='Powerloom|HelperFunctions')
+logger = default_logger.bind(module='HelperFunctions')
 
 
 def cleanup_proc_hub_children(fn):

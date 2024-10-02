@@ -3,6 +3,7 @@
 - [Overview](#overview)
   - [Architecture](#architecture)
 - [Setup](#setup)
+- [Increase IPFS memory limits (for complex use cases)](#increase-ipfs-memory-limits-for-complex-use-cases)
 - [State transitions and data composition](#state-transitions-and-data-composition)
   - [Epoch Generation](#epoch-generation)
   - [Preloading](#preloading)
@@ -91,6 +92,49 @@ If you're a developer, you can follow the [manual configuration steps for pooler
 
 **Note** - RPC usage is highly use-case specific. If your use case is complicated and needs to make a lot of RPC calls, it is recommended to run your own RPC node instead of using third-party RPC services as it can be expensive.
 
+
+## Increase IPFS memory limits (for complex use cases)
+
+If you want to increase the memory limits for IPFS, you can do so by running the following commands, this will reset on system restart though:
+
+```bash
+sudo sysctl -w net.core.rmem_max=8388608
+sudo sysctl -w net.core.wmem_max=8388608
+sudo sysctl -w net.ipv4.udp_mem='8388608 8388608 8388608'
+sudo sysctl -w net.core.netdev_max_backlog=5000
+sudo sysctl -w net.ipv4.tcp_rmem='4096 87380 8388608'
+sudo sysctl -w net.ipv4.tcp_wmem='4096 87380 8388608'
+```
+
+To make these changes permanent, add or modify the following lines in /etc/sysctl.conf:
+
+```
+net.core.rmem_max=8388608
+net.core.wmem_max=8388608
+net.ipv4.udp_mem=8388608 8388608 8388608
+net.core.netdev_max_backlog=5000
+net.ipv4.tcp_rmem=4096 87380 8388608
+net.ipv4.tcp_wmem=4096 87380 8388608
+```
+
+Apply the changes with:
+
+```bash
+sudo sysctl -p
+```
+
+Restart the docker service
+
+```bash
+sudo systemctl restart docker
+```
+
+Finally, bring up your Docker Compose stack again:
+
+```bash
+./clean_stop.sh
+./build.sh
+```
 
 ## State transitions and data composition
 

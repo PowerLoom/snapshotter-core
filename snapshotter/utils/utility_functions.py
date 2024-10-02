@@ -1,7 +1,7 @@
 import asyncio
 from functools import wraps
 
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 
 
 def acquire_bounded_semaphore(fn):
@@ -36,22 +36,22 @@ def acquire_bounded_semaphore(fn):
         """
         # Extract the semaphore from the keyword arguments
         sem: asyncio.BoundedSemaphore = kwargs['semaphore']
-        
+
         # Acquire the semaphore
         await sem.acquire()
-        
+
         result = None
         try:
             # Execute the decorated function
             result = await fn(self, *args, **kwargs)
         except Exception as e:
             # Log any exceptions that occur during execution
-            logger.opt(exception=True).error('Error in asyncio semaphore acquisition decorator: {}', e)
+            default_logger.opt(exception=True).error('Error in asyncio semaphore acquisition decorator: {}', e)
             raise  # Re-raise the exception after logging
         finally:
             # Ensure the semaphore is released, even if an exception occurred
             sem.release()
-        
+
         return result
-    
+
     return wrapped

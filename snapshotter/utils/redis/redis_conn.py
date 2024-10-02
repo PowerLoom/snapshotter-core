@@ -11,12 +11,12 @@ from redis.asyncio.connection import ConnectionPool
 from snapshotter.settings.config import settings
 from snapshotter.settings.config import settings as settings_conf
 from snapshotter.utils.callback_helpers import send_failure_notifications_sync
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
 
 # Setup logging
-logger = logger.bind(module='Powerloom|RedisConn')
+logger = default_logger.bind(module='RedisConn')
 
 # Redis connection configuration
 REDIS_CONN_CONF = {

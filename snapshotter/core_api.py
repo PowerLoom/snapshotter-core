@@ -17,15 +17,14 @@ from web3 import Web3
 from snapshotter.settings.config import settings
 from snapshotter.utils.data_utils import get_project_epoch_snapshot
 from snapshotter.utils.data_utils import get_project_finalized_cid
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import TaskStatusRequest
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.rpc import RpcHelper
 
 
-# Setup logging
-rest_logger = logger.bind(module='CoreAPI')
+rest_logger = default_logger.bind(module='CoreAPI')
 
 
 # Load protocol state contract ABI and address

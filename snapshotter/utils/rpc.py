@@ -23,9 +23,12 @@ from web3 import Web3
 from web3._utils.events import get_event_data
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.exceptions import RPCException
 from snapshotter.utils.models.settings_model import RPCConfigBase
+
+
+logger = default_logger.bind(module='RpcHelper')
 
 
 def get_contract_abi_dict(abi):
@@ -148,7 +151,7 @@ class RpcHelper(object):
         self._node_count = 0
         self._initialized = False
         self._sync_nodes_initialized = False
-        self._logger = logger.bind(module='Powerloom|RpcHelper')
+        self._logger = logger
         self._client = None
         self._async_transport = None
         self._semaphore = None

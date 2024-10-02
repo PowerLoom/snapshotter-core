@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 from typing import List
 
 import tenacity
@@ -13,9 +12,7 @@ from tenacity import wait_random_exponential
 from web3 import Web3
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
-from snapshotter.utils.file_utils import read_json_file
-from snapshotter.utils.file_utils import write_json_file
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.data_models import ProjectStatus
 from snapshotter.utils.models.data_models import SnapshotterIncorrectSnapshotSubmission
 from snapshotter.utils.models.data_models import SnapshotterMissedSnapshotSubmission
@@ -32,7 +29,7 @@ from snapshotter.utils.redis.redis_keys import source_chain_id_key
 from snapshotter.utils.rpc import get_event_sig_and_abi
 from snapshotter.utils.rpc import RpcHelper
 
-logger = logger.bind(module='data_helper')
+logger = default_logger.bind(module='data_helper')
 
 
 def retry_state_callback(retry_state: tenacity.RetryCallState):

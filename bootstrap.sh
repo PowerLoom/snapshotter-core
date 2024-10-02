@@ -1,6 +1,9 @@
 #!/bin/bash
 source .env
 
+rm -rf ipfs-data;
+rm -rf ipfs-export;
+
 # cleanup logs
 rm -rf logs;
 mkdir logs;
