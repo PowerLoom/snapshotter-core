@@ -17,7 +17,7 @@ from redis import asyncio as aioredis
 from web3 import Web3
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.exceptions import GenericExitOnSignal
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import EpochReleasedEvent
@@ -104,7 +104,7 @@ class EventDetectorProcess(multiprocessing.Process):
         self._rabbitmq_thread: threading.Thread
         self._rabbitmq_queue = queue.Queue()
         self._shutdown_initiated = False
-        self._logger = logger.bind(
+        self._logger = default_logger.bind(
             module=f'{name}|{settings.namespace}-{settings.instance_id[:5]}',
         )
 
@@ -476,3 +476,8 @@ class EventDetectorProcess(multiprocessing.Process):
 
         # Start the event detection loop
         self.ev_loop.run_until_complete(self._detect_events())
+
+
+if __name__ == '__main__':
+    event_detector = EventDetectorProcess('SystemEventDetector')
+    event_detector.run()

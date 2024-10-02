@@ -16,10 +16,10 @@ from snapshotter.auth.helpers.redis_keys import user_active_api_keys_set
 from snapshotter.auth.helpers.redis_keys import user_details_htable
 from snapshotter.auth.helpers.redis_keys import user_revoked_api_keys_set
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 
 # Setup logging
-api_logger = logger.bind(module=__name__)
+api_logger = default_logger.bind(module='AuthAPI')
 
 # Setup CORS origins
 origins = ['*']
@@ -68,14 +68,14 @@ async def create_update_user(
             all_users_set(),
             user_cu_request.email,
         )
-        
+
         # If the user is new, set the next reset time
         if not await redis_conn.sismember(
             all_users_set(),
             user_cu_request.email,
         ):
             user_cu_request.next_reset_at = int(time.time()) + 86400
-        
+
         # Store user details in the hash table
         user_details = user_cu_request.dict()
         await redis_conn.hset(
@@ -154,7 +154,7 @@ async def revoke_api_key(
         api_key_request.api_key,
     ):
         return {'success': False, 'error': 'API key already revoked'}
-    
+
     # Move the API key from active to revoked set
     await redis_conn.smove(
         user_active_api_keys_set(email),

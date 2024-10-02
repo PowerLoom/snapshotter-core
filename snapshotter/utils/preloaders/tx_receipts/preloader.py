@@ -2,8 +2,9 @@ import json
 
 from pydantic import ValidationError
 from redis import asyncio as aioredis
+
 from snapshotter.settings.config import settings
-from snapshotter.utils.default_logger import logger
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.generic_delegator_preloader import DelegatorPreloaderAsyncWorker
 from snapshotter.utils.helper_functions import preloading_entry_exit_logger
 from snapshotter.utils.models.message_models import EpochBase
@@ -110,7 +111,7 @@ class TxPreloadWorker(DelegatorPreloaderAsyncWorker):
         5. Create worker request messages for each transaction.
         6. Delegate the computation to the parent class method.
         """
-        self._logger = logger.bind(module='TxPreloadWorker')
+        self._logger = default_logger.bind(module='TxPreloadWorker')
         self._epoch = epoch
         self._redis_conn = redis_conn
 

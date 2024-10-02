@@ -38,6 +38,10 @@ services:
       - "redis"
       - "rabbitmq"
       - "snapshotter-local-collector"
+    depends_on:
+      - "redis"
+      - "rabbitmq"
+      - "snapshotter-local-collector"
     volumes:
       - ./logs/snapshotter:/logs
       - ./config:/config
@@ -77,12 +81,14 @@ services:
     networks:
       - custom_network
   ipfs:
-    image: ipfs/kubo:release
+    image: ipfs/kubo:master-latest
     profiles: ["ipfs"]
     environment:
       - IPFS_PROFILE=server
       - DATA_CLEANUP_DAYS=3
-      - CLEANUP_SCHEDULE=0 * * * *
+      - CLEANUP_SCHEDULE=0 */3 * * *
+      - LIBP2P_FORCE_PNET=0
+      - IPFS_ROUTING=dhtclient
     entrypoint: >
       /bin/sh -c '
       echo "Setting up data cleanup cron job...";
@@ -100,7 +106,8 @@ services:
       exec /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true --agent-version-suffix=docker
       '
     volumes:
-      - ipfs_data:/data/ipfs
+      - ./ipfs-data:/data/ipfs
+      - ./ipfs-export:/export
     ports:
       - "4001:4001"  # Swarm listening port
       - "5001:5001"  # API server
@@ -113,6 +120,10 @@ services:
     restart: unless-stopped
     networks:
       - custom_network
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
   redis:
     command: redis-server --appendonly yes
     image: "redis:alpine"
@@ -154,6 +165,3 @@ networks:
     ipam:
       config:
         - subnet: ${DOCKER_NETWORK_SUBNET}
-volumes:
-  ipfs_data:
-    name: ipfs_data

@@ -1,74 +1,67 @@
+import sys
+from functools import lru_cache
+
 from loguru import logger
+
 from snapshotter.settings.config import settings
 
-# Format string for log messages. {extra} field can be used to pass extra parameters to the logger using .bind()
-FORMAT = '{time:MMMM D, YYYY > HH:mm:ss!UTC} | {level} | {message} | {extra}'
+# Format string for log messages
+FORMAT = '{time:MMMM D, YYYY > HH:mm:ss!UTC} | {level} | Message: {message} | {extra}'
+
 
 def create_level_filter(level):
     """
     Create a filter function for a specific log level.
-
-    Args:
-        level (str): The log level to filter for.
-
-    Returns:
-        function: A filter function that returns True for the specified log level.
     """
-    def filter_func(record):
-        return record["level"].name == level
-    return filter_func
+    return lambda record: record['level'].name == level
 
-# Create filter functions for each log level
-logger_filter_trace = create_level_filter("TRACE")
-logger_filter_debug = create_level_filter("DEBUG")
-logger_filter_info = create_level_filter("INFO")
-logger_filter_success = create_level_filter("SUCCESS")
-logger_filter_warning = create_level_filter("WARNING")
-logger_filter_error = create_level_filter("ERROR")
-logger_filter_critical = create_level_filter("CRITICAL")
 
-def trace_enabled(_):
+@lru_cache(maxsize=None)
+def get_logger():
     """
-    Returns the value of trace_enabled setting from the settings module.
-
-    Args:
-        _: Unused argument.
-
-    Returns:
-        bool: The value of trace_enabled setting.
+    Configure and return the logger instance.
+    This function is cached, so it will only configure the logger once.
     """
-    return settings.logs.trace_enabled
-
-
-def configure_file_logging():
-    """
-    Configure file logging for different log levels if enabled in settings.
-    """
+    # Force remove all handlers
+    new_logger = logger.bind()
+    new_logger.configure(handlers=[])
+    new_logger.remove()
+    # Configure file logging
     log_levels = [
-        ("debug", "DEBUG", logger_filter_debug),
-        ("info", "INFO", logger_filter_info),
-        ("success", "SUCCESS", logger_filter_success),
-        ("warning", "WARNING", logger_filter_warning),
-        ("error", "ERROR", logger_filter_error),
-        ("critical", "CRITICAL", logger_filter_critical),
-        ("trace", "TRACE", logger_filter_trace),
+        ('trace', 'TRACE'),
+        ('debug', 'DEBUG'),
+        ('info', 'INFO'),
+        ('success', 'SUCCESS'),
+        ('warning', 'WARNING'),
+        ('error', 'ERROR'),
+        ('critical', 'CRITICAL'),
     ]
 
-    for file_name, level, filter_func in log_levels:
-        logger.add(
-            f'logs/{file_name}.log',
-            level=level,
-            format=FORMAT,
-            filter=filter_func,
-            rotation='6 hours',
-            compression='tar.xz',
-            retention='2 days',
-        )
+    if settings.logs.write_to_files:
+        for file_name, level in log_levels:
+            logger.add(
+                f'logs/{file_name}.log',
+                level=level,
+                format=FORMAT,
+                filter=create_level_filter(level),
+                rotation='6 hours',
+                compression='tar.xz',
+                retention='2 days',
+            )
+
+    if settings.logs.trace_enabled:
+        logger.add(sys.stdout, level='TRACE', format=FORMAT, filter=create_level_filter('TRACE'))
+        logger.add(sys.stdout, level='DEBUG', format=FORMAT, filter=create_level_filter('DEBUG'))
+
+    logger.add(sys.stdout, level='INFO', format=FORMAT, filter=create_level_filter('INFO'))
+    logger.add(sys.stdout, level='SUCCESS', format=FORMAT, filter=create_level_filter('SUCCESS'))
+
+    logger.add(sys.stderr, level='WARNING', format=FORMAT, filter=create_level_filter('WARNING'))
+    logger.add(sys.stderr, level='ERROR', format=FORMAT, filter=create_level_filter('ERROR'))
+    logger.add(sys.stderr, level='CRITICAL', format=FORMAT, filter=create_level_filter('CRITICAL'))
+
+    return new_logger
 
 
-# Remove any pre-existing handlers
-logger.remove()
-
-# Configure file logging if enabled in settings
-if settings.logs.write_to_files:
-    configure_file_logging()
+# Usage
+default_logger = get_logger()

@@ -8,17 +8,14 @@ if [ $ret_status -ne 0 ]; then
     echo "Snapshotter identity check failed on protocol smart contract"
     exit 1
 fi
+
+# sleep for 30 seconds to allow other services to start
+sleep 30
+
+poetry run python -m snapshotter.init_rabbitmq
+
 echo 'starting processes...';
 pm2 start pm2.config.js
-
-# Waiting for other processes to start
-echo 'waiting for processes to start..';
-sleep 10
-
-poetry run python -m snapshotter.processhub_cmd start ProcessorDistributor
-sleep 3
-
-poetry run python -m snapshotter.processhub_cmd start SystemEventDetector
 
 echo 'started all snapshotter scripts';
 
