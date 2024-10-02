@@ -16,3 +16,6 @@ config
 computes
 logs
 .coverage
+.pytest_cache
+.mypy_cache
+htmlcov
