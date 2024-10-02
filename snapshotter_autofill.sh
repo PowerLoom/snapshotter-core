@@ -170,4 +170,15 @@ else
 fi
 
 
+# Set default rate limits
+SOURCE_RPC_RATE_LIMIT="${SOURCE_RPC_RATE_LIMIT:-10}"
+PROST_RPC_RATE_LIMIT="${PROST_RPC_RATE_LIMIT:-10}"
+
+echo "Using SOURCE RPC Rate Limit: ${SOURCE_RPC_RATE_LIMIT}"
+echo "Using PROST RPC Rate Limit: ${PROST_RPC_RATE_LIMIT}"
+
+sed -i'.backup' "s/\"source-rpc-rate-limit\"/$SOURCE_RPC_RATE_LIMIT/" config/settings.json
+
+sed -i'.backup' "s/\"prost-rpc-rate-limit\"/$PROST_RPC_RATE_LIMIT/" config/settings.json
+
 echo 'settings has been populated!'
