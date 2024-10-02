@@ -43,15 +43,18 @@ Note: These tests use a custom RPC configuration (TEST_RPC_CONFIG) that points t
 
 RATE_LIMIT_OVERRIDE = RateLimitConfig(
     requests_per_second=1,
-    requests_per_minute=60,
-    requests_per_day=86400,
 )
 
 TEST_RPC_CONFIG = RPCConfigFull(
-    full_nodes=[RPCNodeConfig(url='http://127.0.0.1:8545')],
-    archive_nodes=[RPCNodeConfig(url='http://127.0.0.1:8545')],
+    full_nodes=[
+        RPCNodeConfig(
+            url='http://127.0.0.1:8545',
+            rate_limit=RateLimitConfig(
+                requests_per_second=10,
+            ),
+        ),
+    ],
     connection_limits=settings.rpc.connection_limits,
-    rate_limit=settings.rpc.rate_limit,
     semaphore_value=settings.rpc.semaphore_value,
     retry=settings.rpc.retry,
     force_archive_blocks=settings.rpc.force_archive_blocks,
@@ -89,7 +92,7 @@ async def rpc_helper(snapshot):
 @async_fixture(scope='module')
 async def rpc_helper_override(snapshot):
     override_config = TEST_RPC_CONFIG
-    override_config.rate_limit = RATE_LIMIT_OVERRIDE
+    override_config.full_nodes[0].rate_limit = RATE_LIMIT_OVERRIDE
     override_helper = RpcHelper(rpc_settings=override_config)
     await override_helper.init()
     yield override_helper

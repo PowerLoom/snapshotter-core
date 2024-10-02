@@ -22,9 +22,15 @@ class CoreAPI(BaseModel):
     public_rate_limit: str
 
 
+class RateLimitConfig(BaseModel):
+    """RPC Rate limit configuration model."""
+    requests_per_second: int
+
+
 class RPCNodeConfig(BaseModel):
     """RPC node configuration model."""
     url: str
+    rate_limit: RateLimitConfig
 
 
 class ConnectionLimits(BaseModel):
@@ -32,13 +38,6 @@ class ConnectionLimits(BaseModel):
     max_connections: int = 100
     max_keepalive_connections: int = 50
     keepalive_expiry: int = 300
-
-
-class RateLimitConfig(BaseModel):
-    """RPC Rate limit configuration model."""
-    requests_per_second: int
-    requests_per_minute: int
-    requests_per_day: int
 
 
 class RPCConfigBase(BaseModel):
@@ -56,7 +55,6 @@ class RPCConfigFull(RPCConfigBase):
     skip_epoch_threshold_blocks: int
     polling_interval: int
     semaphore_value: int = 20
-    rate_limit: RateLimitConfig
 
 
 class RLimit(BaseModel):
