@@ -51,11 +51,11 @@ const appConfigs = [
   }),
   createAppConfig("system-event-detector", "snapshotter.system_event_detector"),
   createWorkerConfig("delegate-worker", "snapshotter.utils.delegate_worker",
-    callback_worker_config.num_delegate_workers, '0 6 * * *'),
+    callback_worker_config.num_delegate_workers, '0 */6 * * *'),
   createWorkerConfig("snapshot-worker", "snapshotter.utils.snapshot_worker",
-    callback_worker_config.num_snapshot_workers, '0 9 * * *'),
+    callback_worker_config.num_snapshot_workers, '0 */6 * * *'),
   createWorkerConfig("aggregation-worker", "snapshotter.utils.aggregation_worker",
-    callback_worker_config.num_aggregation_workers, '0 18 * * *'),
+    callback_worker_config.num_aggregation_workers, '0 */6 * * *'),
 ];
 
 // Filter out null configurations (zero count services)
