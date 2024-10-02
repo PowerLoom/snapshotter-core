@@ -37,13 +37,33 @@ TEST_RPC_CONFIG = RPCConfigFull(
 )
 
 @async_fixture(scope='module')
-async def rpc_helper():
+async def web3():
+    w3 = AsyncWeb3(AsyncHTTPProvider('http://127.0.0.1:8545'))
+    yield w3
+
+@async_fixture(scope='module')
+async def snapshot(web3: AsyncWeb3):
+    # Take a snapshot of the current state
+    snapshot_id = await web3.provider.make_request('evm_snapshot', [])
+    print(f'Snapshot created with ID: {snapshot_id}')
+
+    yield snapshot_id['result']
+
+    # Revert to the snapshot after all tests are done
+    revert_result = await web3.provider.make_request('evm_revert', [snapshot_id['result']])
+    print(f'Snapshot revert result: {revert_result}')
+
+    if not revert_result['result']:
+        raise Exception('Snapshot revert failed')
+
+@async_fixture(scope='module')
+async def rpc_helper(snapshot):
     helper = RpcHelper(rpc_settings=TEST_RPC_CONFIG)
     await helper.init()
     yield helper
 
 @async_fixture(scope='module')
-async def rpc_helper_override():
+async def rpc_helper_override(snapshot):
     override_config = TEST_RPC_CONFIG
     override_config.rate_limit = RATE_LIMIT_OVERRIDE
     override_helper = RpcHelper(rpc_settings=override_config)
@@ -51,11 +71,7 @@ async def rpc_helper_override():
     yield override_helper
 
 @async_fixture(scope='module')
-async def web3():
-    yield AsyncWeb3(AsyncHTTPProvider('http://127.0.0.1:8545'))
-
-@async_fixture(scope='module')
-async def protocol_contract(web3: AsyncWeb3):
+async def protocol_contract(web3: AsyncWeb3, snapshot):
     # Load Implementation ABI and Bytecode
     with open('snapshotter/static/abis/ProtocolContract.json', 'r') as abi_file:
         implementation_abi = json.load(abi_file)
