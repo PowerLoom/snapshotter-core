@@ -15,3 +15,9 @@ snapshotter-lite-local-collector
 config
 computes
 logs
+ipfs-data
+ipfs-export
+.coverage
+.pytest_cache
+.mypy_cache
+htmlcov
