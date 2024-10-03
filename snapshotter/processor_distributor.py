@@ -194,9 +194,9 @@ class ProcessorDistributor(multiprocessing.Process):
         Initializes the RpcHelper instance if it is not already initialized.
         """
         self._rpc_helper = RpcHelper()
-        await self._rpc_helper.init(redis_conn=self._redis_conn)
-        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
-        await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
+        await self._rpc_helper.init()
+        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
+        await self._anchor_rpc_helper.init()
 
     async def _init_rabbitmq_connection(self):
         """
@@ -1080,15 +1080,8 @@ class ProcessorDistributor(multiprocessing.Process):
         for signame in [SIGINT, SIGTERM, SIGQUIT]:
             signal(signame, self._signal_handler)
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-        self._anchor_rpc_helper = RpcHelper(
-            rpc_settings=settings.anchor_chain_rpc,
-        )
-
-        self._slots_per_day = 12
-        self._logger.debug('Set slots per day to {}', self._slots_per_day)
 
         ev_loop = asyncio.get_event_loop()
-        ev_loop.run_until_complete(self._anchor_rpc_helper.init())
         ev_loop.run_until_complete(self.init_worker())
 
         self._logger.debug('Starting RabbitMQ consumer on queue {} for Processor Distributor', self._consume_queue_name)

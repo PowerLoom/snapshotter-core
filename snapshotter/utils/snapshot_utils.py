@@ -52,7 +52,7 @@ async def get_block_details_in_block_range(
             return cached_details
 
         # Fetch block details from RPC if not cached
-        rpc_batch_block_details = await rpc_helper.batch_eth_get_block(from_block, to_block, redis_conn)
+        rpc_batch_block_details = await rpc_helper.batch_eth_get_block(from_block, to_block)
 
         rpc_batch_block_details = rpc_batch_block_details if rpc_batch_block_details else []
 

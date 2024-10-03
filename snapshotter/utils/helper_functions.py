@@ -43,34 +43,6 @@ def cleanup_proc_hub_children(fn):
     return wrapper
 
 
-def acquire_threading_semaphore(fn):
-    """
-    A decorator function that acquires a threading semaphore before executing the decorated function and releases it after execution.
-
-    Args:
-        fn (function): The function to be decorated.
-
-    Returns:
-        function: The decorated function.
-    """
-    @wraps(fn)
-    def semaphore_wrapper(*args, **kwargs):
-        semaphore = kwargs['semaphore']
-
-        logger.debug('Acquiring threading semaphore')
-        semaphore.acquire()
-        try:
-            resp = fn(*args, **kwargs)
-        except Exception:
-            raise
-        finally:
-            semaphore.release()
-
-        return resp
-
-    return semaphore_wrapper
-
-
 def preloading_entry_exit_logger(fn):
     """
     Decorator function to log entry and exit of preloading worker functions.
