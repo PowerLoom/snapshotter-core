@@ -498,9 +498,9 @@ class GenericAsyncWorker(multiprocessing.Process):
         Initializes the RpcHelper objects for the worker and anchor chain, and sets up the protocol state contract.
         """
         self._rpc_helper = RpcHelper(rpc_settings=settings.rpc)
-        await self._rpc_helper.init(redis_conn=self._redis_conn)
-        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
-        await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
+        await self._rpc_helper.init()
+        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
+        await self._anchor_rpc_helper.init()
         await self._anchor_rpc_helper._load_async_web3_providers()
         self._protocol_state_contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
             address=Web3.to_checksum_address(

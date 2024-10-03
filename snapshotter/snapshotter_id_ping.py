@@ -22,8 +22,8 @@ async def main():
     redis_conn = aioredis_pool._aioredis_pool
 
     # Initialize RPC helper for anchor chain
-    anchor_rpc = RpcHelper(settings.anchor_chain_rpc)
-    await anchor_rpc.init(redis_conn=redis_conn)
+    anchor_rpc = RpcHelper(settings.anchor_chain_rpc, source_node=False)
+    await anchor_rpc.init()
 
     # Load protocol state ABI
     protocol_abi = read_json_file(settings.protocol_state.abi)

@@ -63,7 +63,6 @@ class TxReceiptProcessor(GenericDelegateProcessor):
         # Fetch the transaction receipt
         tx_receipt_obj: web3.datastructures.AttributeDict = await rpc_helper.get_transaction_receipt(
             tx_hash,
-            redis_conn,
         )
 
         # Convert AttributeDict to regular dictionary

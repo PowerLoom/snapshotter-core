@@ -117,7 +117,7 @@ class EventDetectorProcess(multiprocessing.Process):
 
         self._last_processed_block = None
         self._source_rpc_helper = RpcHelper(rpc_settings=settings.rpc)
-        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
+        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
         self.contract_abi = read_json_file(
             settings.protocol_state.abi,
             self._logger,
@@ -304,7 +304,7 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         while True:
             try:
-                current_block = await self._anchor_rpc_helper.get_current_block(redis_conn=self._redis_conn)
+                current_block = await self._anchor_rpc_helper.get_current_block()
                 self._logger.info('Current block: {}', current_block)
 
             except Exception as e:
@@ -408,8 +408,8 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         Initializes the RpcHelper instances for both anchor and source chains.
         """
-        await self._anchor_rpc_helper.init(redis_conn=self._redis_conn)
-        await self._source_rpc_helper.init(redis_conn=self._redis_conn)
+        await self._anchor_rpc_helper.init()
+        await self._source_rpc_helper.init()
 
     @rabbitmq_and_redis_cleanup
     def run(self):
