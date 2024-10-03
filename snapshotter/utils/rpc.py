@@ -1,6 +1,9 @@
 import asyncio
 from functools import wraps
+from typing import Any
 from typing import List
+from typing import Optional
+from typing import Tuple
 from typing import Union
 
 import eth_abi
@@ -308,6 +311,7 @@ class RpcHelper(object):
             next_node_idx, retry_state.outcome.exception(),
         )
 
+    # TODO: update to handle batch calls using explicit resource aquisition (self._rate_limiter.acquire(n))
     async def _rate_limited_call(self, coroutine):
         async with self._rate_limiter:
             return await coroutine
@@ -497,6 +501,88 @@ class RpcHelper(object):
                 )
                 raise exc
         return await f(node_idx=0)
+
+    @acquire_rpc_semaphore
+    async def batch_web3_contract_calls(
+        self,
+        tasks: List[Tuple[str, List[Any]]],
+        contract_obj: Web3.eth.contract.Contract,
+        block_override: Optional[List[int]] = None,
+    ) -> List[Any]:
+        """
+        Performs batch web3 calls for multiple contract functions.
+
+        Args:
+            contract_obj: Web3 contract object.
+            tasks: List of tuples, each containing (function_name, function_args).
+
+        Returns:
+            List[Any]: List of results from the batch call.
+        """
+
+        if block_override and len(block_override) != len(tasks):
+            self._logger.warning(
+                'Block override length {} is not equal to the number of tasks {}. Ignoring block override.',
+                len(block_override), len(tasks),
+            )
+            block_override = None
+
+        # Prepare batch request
+        batch = []
+        req_id = 1
+        for i, task in enumerate(tasks):
+            block = block_override[i] if block_override else 'latest'
+            function = contract_obj.functions[task[0]]
+            transaction = function(*task[1]).build_transaction({
+                'gas': 0,
+                'gasPrice': 0,
+                'nonce': 0,
+                'from': '0x0000000000000000000000000000000000000000',
+            })
+            batch.append({
+                'jsonrpc': '2.0',
+                'method': 'eth_call',
+                'params': [transaction, block],
+                'id': req_id,
+            })
+            req_id += 1
+
+        try:
+            # Make batch RPC call
+            response_data = await self._rate_limited_call(
+                self._make_rpc_jsonrpc_call(batch),
+            )
+
+            # Process responses
+            results = []
+            abi_dict = get_contract_abi_dict(contract_obj.abi)
+            for i, response in enumerate(response_data):
+                if 'result' in response:
+                    function_name, _ = tasks[i]
+                    decoded_result = eth_abi.decode(
+                        abi_dict.get(function_name)['output'],
+                        HexBytes(response['result']),
+                    )
+                    results.append(decoded_result[0] if len(decoded_result) == 1 else decoded_result)
+                else:
+                    # Handle individual response errors
+                    raise RPCException(
+                        request=batch[i],
+                        response=response,
+                        underlying_exception=None,
+                        extra_info=f'Error in batch call for function {tasks[i][0]}',
+                    )
+
+            return results
+        except Exception as e:
+            exc = RPCException(
+                request=batch,
+                response=None,
+                underlying_exception=e,
+                extra_info=f'RPC_BATCH_CALL_ERROR: {str(e)}',
+            )
+            self._logger.trace('Error in batch_web3_calls, error {}', str(exc))
+            raise exc
 
     @acquire_rpc_semaphore
     async def _make_rpc_jsonrpc_call(self, rpc_query, redis_conn=None):
