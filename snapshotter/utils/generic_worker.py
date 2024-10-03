@@ -753,20 +753,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         else:
             self._epoch_size = epoch_size[0]
             self._logger.debug('Set epoch size to {}', self._epoch_size)
-        try:
-            submission_window = await get_snapshot_submision_window(
-                redis_conn=self._redis_conn,
-                rpc_helper=self._anchor_rpc_helper,
-                state_contract_obj=self._protocol_state_contract,
-            )
-        except Exception as e:
-            self._logger.exception(
-                'Exception in querying protocol state for snapshot submission window: {}',
-                e,
-            )
-        else:
-            self._submission_window = submission_window
-            self._logger.debug('Set snapshot submission window to {}', self._submission_window)
 
     async def init(self):
         """
