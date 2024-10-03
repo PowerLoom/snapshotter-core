@@ -3,7 +3,6 @@ import json
 from typing import List
 
 import tenacity
-from ipfs_client.dag import IPFSAsyncClientError
 from redis import asyncio as aioredis
 from tenacity import retry
 from tenacity import retry_if_exception_type
@@ -13,20 +12,12 @@ from web3 import Web3
 
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
-from snapshotter.utils.models.data_models import ProjectStatus
-from snapshotter.utils.models.data_models import SnapshotterIncorrectSnapshotSubmission
-from snapshotter.utils.models.data_models import SnapshotterMissedSnapshotSubmission
-from snapshotter.utils.models.data_models import SnapshotterProjectStatus
-from snapshotter.utils.models.data_models import SnapshotterReportState
-from snapshotter.utils.models.data_models import SnapshotterStatus
-from snapshotter.utils.models.data_models import SnapshotterStatusReport
+from snapshotter.utils.redis.redis_keys import cid_not_found_key
 from snapshotter.utils.redis.redis_keys import project_finalized_data_zset
 from snapshotter.utils.redis.redis_keys import project_first_epoch_hmap
-from snapshotter.utils.redis.redis_keys import project_snapshotter_status_report_key
 from snapshotter.utils.redis.redis_keys import source_chain_block_time_key
 from snapshotter.utils.redis.redis_keys import source_chain_epoch_size_key
 from snapshotter.utils.redis.redis_keys import source_chain_id_key
-from snapshotter.utils.rpc import get_event_sig_and_abi
 from snapshotter.utils.rpc import RpcHelper
 
 logger = default_logger.bind(module='data_helper')
@@ -348,12 +339,12 @@ async def get_project_first_epoch(redis_conn: aioredis.Redis, state_contract_obj
 
 @retry(
     reraise=True,
-    retry=retry_if_exception_type(IPFSAsyncClientError),
+    retry=retry_if_exception_type(Exception),
     wait=wait_random_exponential(multiplier=0.5, max=10),
     stop=stop_after_attempt(3),
     before_sleep=retry_state_callback,
 )
-async def fetch_file_from_ipfs(ipfs_reader, cid):
+async def _fetch_file_from_ipfs(ipfs_reader, cid):
     """
     Fetches a file from IPFS using the given IPFS reader and CID.
 
@@ -367,6 +358,23 @@ async def fetch_file_from_ipfs(ipfs_reader, cid):
         The contents of the file as bytes.
     """
     return await ipfs_reader.cat(cid)
+
+
+async def fetch_file_from_ipfs(redis_conn: aioredis.Redis, ipfs_reader, cid):
+    """
+    Fetches a file from IPFS using the given IPFS reader and CID.
+
+    Uses _fetch_file_from_ipfs under the hood, if it is unable to fetch file from IPFS, it will mark the cid as not found in redis.
+    """
+    if await redis_conn.get(cid_not_found_key(cid)):
+        return dict()
+    try:
+        data = await _fetch_file_from_ipfs(ipfs_reader, cid)
+        return json.loads(data)
+    except Exception as e:
+        logger.error(f'Error while fetching data from IPFS | CID {cid} | Error: {e}')
+        await redis_conn.set(cid_not_found_key(cid), 'true', ex=86400)
+        return dict()
 
 
 async def get_submission_data(redis_conn: aioredis.Redis, cid, ipfs_reader, project_id: str) -> dict:
@@ -388,14 +396,7 @@ async def get_submission_data(redis_conn: aioredis.Redis, cid, ipfs_reader, proj
     if not cid or 'null' in cid:
         return dict()
 
-    try:
-        submission_data = await fetch_file_from_ipfs(ipfs_reader, cid)
-        submission_data = json.loads(submission_data)
-    except:
-        logger.error('Error while fetching data from IPFS | Project {} | CID {}', project_id, cid)
-        submission_data = dict()
-
-    return submission_data
+    return await fetch_file_from_ipfs(redis_conn, ipfs_reader, cid)
 
 
 async def get_submission_data_bulk(
@@ -499,118 +500,6 @@ async def get_source_chain_id(redis_conn: aioredis.Redis, state_contract_obj, rp
             source_chain_id,
         )
         return source_chain_id
-
-
-async def build_projects_list_from_events(redis_conn: aioredis.Redis, state_contract_obj, rpc_helper: RpcHelper):
-    """
-    Builds a list of project IDs from the 'ProjectsUpdated' events emitted by the state contract.
-
-    This function fetches and processes events in batches to build the list of active projects.
-
-    Args:
-        redis_conn (aioredis.Redis): Redis connection object.
-        state_contract_obj: Contract object of the state contract.
-        rpc_helper: Helper object for making RPC calls.
-
-    Returns:
-        list: List of project IDs.
-    """
-    # Define event signatures and ABIs
-    EVENT_SIGS = {
-        'ProjectsUpdated': 'ProjectsUpdated(addres,string,bool,uint256)',
-    }
-
-    EVENT_ABI = {
-        'ProjectsUpdated': state_contract_obj.events.ProjectsUpdated._get_event_abi(),
-    }
-
-    # Get the start block and current block
-    [start_block] = await rpc_helper.web3_call(
-        tasks=[('DeploymentBlockNumber', [Web3.to_checksum_address(settings.data_market)])],
-        contract_addr=state_contract_obj.address,
-        abi=state_contract_obj.abi,
-    )
-
-    current_block = await rpc_helper.get_current_block_number()
-    event_sig, event_abi = get_event_sig_and_abi(EVENT_SIGS, EVENT_ABI)
-
-    # Process events in batches
-    request_task_batch_size = 10
-    project_updates = set()
-    for cumulative_block_range in range(start_block, current_block, 1000 * request_task_batch_size):
-        tasks = []
-        for block_range in range(
-            cumulative_block_range,
-            min(current_block, cumulative_block_range + 1000 * request_task_batch_size),
-            1000,
-        ):
-            tasks.append(
-                rpc_helper.get_events_logs(
-                    contract_address=Web3.to_checksum_address(settings.data_market),
-                    to_block=min(current_block, block_range + 1000),
-                    from_block=block_range,
-                    topics=[event_sig],
-                    event_abi=event_abi,
-                ),
-            )
-
-        block_range_event_logs = await asyncio.gather(*tasks)
-
-        # Process event logs
-        for event_logs in block_range_event_logs:
-            for event_log in event_logs:
-                if event_log.args.allowed:
-                    project_updates.add(event_log.args.projectId)
-                else:
-                    project_updates.discard(event_log.args.projectId)
-
-    return list(project_updates)
-
-
-async def get_projects_list(redis_conn: aioredis.Redis, state_contract_obj, rpc_helper: RpcHelper):
-    """
-    Fetches the list of projects from the state contract.
-
-    Args:
-        redis_conn (aioredis.Redis): Redis connection object.
-        state_contract_obj: Contract object for the state contract.
-        rpc_helper: RPC helper object.
-
-    Returns:
-        List: List of projects.
-    """
-    try:
-        [projects_list] = await rpc_helper.web3_call(
-            tasks=[('getProjects', [])],
-            contract_addr=state_contract_obj.address,
-            abi=state_contract_obj.abi,
-        )
-        return projects_list
-
-    except Exception as e:
-        logger.warning('Error while fetching projects list from contract', error=e)
-        return []
-
-
-async def get_snapshot_submision_window(redis_conn: aioredis.Redis, state_contract_obj, rpc_helper: RpcHelper):
-    """
-    Get the snapshot submission window from the state contract.
-
-    Args:
-        redis_conn (aioredis.Redis): Redis connection object.
-        state_contract_obj: State contract object.
-        rpc_helper: RPC helper object.
-
-    Returns:
-        submission_window (int): The snapshot submission window.
-    """
-    [submission_window] = await rpc_helper.web3_call(
-        tasks=[('snapshotSubmissionWindow', [Web3.to_checksum_address(settings.data_market)])],
-        contract_addr=state_contract_obj.address,
-        abi=state_contract_obj.abi,
-    )
-
-    return submission_window
 
 
 async def get_source_chain_epoch_size(redis_conn: aioredis.Redis, state_contract_obj, rpc_helper: RpcHelper):
@@ -817,120 +706,6 @@ async def get_project_epoch_snapshot_bulk(
     return all_snapshot_data
 
 
-# UNUSED
-async def get_snapshotter_status(redis_conn: aioredis.Redis):
-    """
-    Returns the snapshotter status for all projects.
-
-    This function aggregates status information for all projects, including
-    successful, incorrect, and missed submissions.
-
-    Args:
-        redis_conn (aioredis.Redis): Redis connection object.
-
-    Returns:
-        SnapshotterStatus: Object containing the snapshotter status for all projects.
-    """
-    status_keys = []
-
-    # Get all project IDs
-    all_projects = await redis_conn.smembers('storedProjectIds')
-    all_projects = [project_id.decode('utf-8') for project_id in all_projects]
-
-    # Prepare keys for fetching status data
-    for project_id in all_projects:
-        status_keys.append(f'projectID:{project_id}:totalSuccessfulSnapshotCount')
-        status_keys.append(f'projectID:{project_id}:totalIncorrectSnapshotCount')
-        status_keys.append(f'projectID:{project_id}:totalMissedSnapshotCount')
-
-    # Fetch all status data in one call
-    all_projects_status = await redis_conn.mget(status_keys)
-
-    total_successful_submissions = 0
-    total_incorrect_submissions = 0
-    total_missed_submissions = 0
-    overall_status = SnapshotterStatus(projects=[])
-
-    # Process status data for each project
-    project_index = 0
-    for index in range(0, len(all_projects_status), 3):
-        successful_submissions = int(all_projects_status[index] or 0)
-        incorrect_submissions = int(all_projects_status[index + 1] or 0)
-        missed_submissions = int(all_projects_status[index + 2] or 0)
-
-        total_successful_submissions += successful_submissions
-        total_incorrect_submissions += incorrect_submissions
-        total_missed_submissions += missed_submissions
-
-        overall_status.projects.append(
-            ProjectStatus(
-                projectId=all_projects[project_index],
-                successfulSubmissions=successful_submissions,
-                incorrectSubmissions=incorrect_submissions,
-                missedSubmissions=missed_submissions,
-            ),
-        )
-        project_index += 1
-
-    # Set overall totals
-    overall_status.totalSuccessfulSubmissions = total_successful_submissions
-    overall_status.totalIncorrectSubmissions = total_incorrect_submissions
-    overall_status.totalMissedSubmissions = total_missed_submissions
-
-    return overall_status
-
-
-# UNUSED
-async def get_snapshotter_project_status(redis_conn: aioredis.Redis, project_id: str, with_data: bool):
-    """
-    Retrieves the snapshotter project status for a given project ID.
-
-    This function fetches detailed status reports for a specific project,
-    including missed and incorrect submissions.
-
-    Args:
-        redis_conn (aioredis.Redis): Redis connection object.
-        project_id (str): ID of the project to retrieve the status for.
-        with_data (bool): Whether to include snapshot data in the response.
-
-    Returns:
-        SnapshotterProjectStatus: Object containing the project status.
-    """
-    # Fetch all status reports for the project
-    reports = await redis_conn.hgetall(project_snapshotter_status_report_key(project_id))
-
-    reports = {
-        int(k.decode('utf-8')): SnapshotterStatusReport.parse_raw(v.decode('utf-8'))
-        for k, v in reports.items()
-    }
-
-    project_status = SnapshotterProjectStatus(missedSubmissions=[], incorrectSubmissions=[])
-
-    for epoch_id, report in reports.items():
-        if report.state is SnapshotterReportState.MISSED_SNAPSHOT:
-            project_status.missedSubmissions.append(
-                SnapshotterMissedSnapshotSubmission(
-                    epochId=epoch_id,
-                    reason=report.reason,
-                    finalizedSnapshotCid=report.finalizedSnapshotCid,
-                ),
-            )
-        elif report.state is SnapshotterReportState.SUBMITTED_INCORRECT_SNAPSHOT:
-            project_status.incorrectSubmissions.append(
-                SnapshotterIncorrectSnapshotSubmission(
-                    epochId=epoch_id,
-                    reason=report.reason,
-                    submittedSnapshotCid=report.submittedSnapshotCid,
-                    submittedSnapshot=report.submittedSnapshot if with_data else None,
-                    finalizedSnapshotCid=report.finalizedSnapshotCid,
-                    finalizedSnapshot=report.finalizedSnapshot if with_data else None,
-                ),
-            )
-
-    return project_status
-
-
-# UNUSED
 async def get_project_time_series_data(
         start_time: int,
         end_time: int,

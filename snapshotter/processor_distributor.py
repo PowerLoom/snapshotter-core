@@ -38,7 +38,6 @@ from snapshotter.settings.config import projects_config
 from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
-from snapshotter.utils.data_utils import get_snapshot_submision_window
 from snapshotter.utils.data_utils import get_source_chain_epoch_size
 from snapshotter.utils.data_utils import get_source_chain_id
 from snapshotter.utils.default_logger import default_logger
@@ -329,11 +328,6 @@ class ProcessorDistributor(multiprocessing.Process):
             rpc_helper=self._anchor_rpc_helper,
         )
         self._source_chain_id = await get_source_chain_id(
-            redis_conn=self._redis_conn,
-            rpc_helper=self._anchor_rpc_helper,
-            state_contract_obj=self._protocol_state_contract,
-        )
-        self._submission_window = await get_snapshot_submision_window(
             redis_conn=self._redis_conn,
             rpc_helper=self._anchor_rpc_helper,
             state_contract_obj=self._protocol_state_contract,

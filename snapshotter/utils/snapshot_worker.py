@@ -152,8 +152,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     epoch_id=msg_obj.epochId, project_id=project_id,
                 ),
                 value=snapshot.json(),
-                # Set expiration time (10 times the submission window * 2 seconds)
-                ex=self._submission_window * 10 * 2,
+                # Store snapshot for 10 mins
+                ex=600,
             )
 
             # Update Redis with success state
@@ -289,8 +289,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                         epoch_id=msg_obj.epochId, project_id=project_id,
                     ),
                     value=snapshot.json(),
-                    # Set expiration time (10 times the submission window * 2 seconds)
-                    ex=self._submission_window * 10 * 2,
+                    # Store snapshot for 10 mins
+                    ex=600,
                 )
 
                 # Update Redis with success state
