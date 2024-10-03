@@ -31,7 +31,7 @@ async def test_web3_async_call():
     writer_redis_pool = aioredis_pool._aioredis_pool
 
     # Set up the RPC helper with the anchor chain RPC
-    rpc_helper = RpcHelper(settings.anchor_chain_rpc)
+    rpc_helper = RpcHelper(settings.anchor_chain_rpc, source_node=False)
     await rpc_helper.init()
 
     # Create a synchronous Web3 client

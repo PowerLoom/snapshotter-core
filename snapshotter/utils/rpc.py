@@ -107,36 +107,9 @@ def get_event_sig_and_abi(event_signatures, event_abis):
     return event_sig, event_abi
 
 
-def acquire_rpc_semaphore(fn):
-    """
-    A decorator function that acquires a bounded semaphore before executing the decorated function and releases it
-    after the function is executed. This decorator is intended to be used with async functions.
-
-    Args:
-        fn: The async function to be decorated.
-
-    Returns:
-        The decorated async function.
-    """
-    @wraps(fn)
-    async def wrapped(self, *args, **kwargs):
-        sem: asyncio.BoundedSemaphore = self._semaphore
-        await sem.acquire()
-        result = None
-        try:
-            result = await fn(self, *args, **kwargs)
-            return result
-        except Exception as e:
-            logger.opt(exception=True).error('Error in asyncio semaphore acquisition decorator: {}', e)
-            raise e
-        finally:
-            sem.release()
-    return wrapped
-
-
 class RpcHelper(object):
 
-    def __init__(self, rpc_settings: RPCConfigBase = settings.rpc, archive_mode=False):
+    def __init__(self, rpc_settings: RPCConfigBase = settings.rpc, archive_mode=False, source_node: bool = False):
         """
         Initializes an instance of the RpcHelper class.
 
@@ -154,7 +127,7 @@ class RpcHelper(object):
         self._logger = logger
         self._client = None
         self._async_transport = None
-        self._semaphore = None
+        self._source_node = source_node
 
     async def _init_http_clients(self):
         """
@@ -201,7 +174,6 @@ class RpcHelper(object):
             None
         """
         if not self._initialized:
-            self._semaphore = asyncio.BoundedSemaphore(value=settings.rpc.semaphore_value)
 
             if not self._sync_nodes_initialized:
                 self._logger.debug('Sync nodes not initialized, initializing...')
@@ -244,13 +216,22 @@ class RpcHelper(object):
             raise Exception('No full nor archive nodes found in config')
         for node in nodes:
             try:
+                _total_workers = settings.callback_worker_config.num_aggregation_workers + \
+                    settings.callback_worker_config.num_snapshot_workers + settings.callback_worker_config.num_delegate_workers + 1
+                if self._source_node:
+                    # Adding 1 to account for processor distributor RPC usage
+                    _total_workers += 1
+                else:
+                    # Adding 3 to account for processor distributor, event detector and
+                    # core API usage (assuming there isn't crazy load and it is serving reasonable amount of requests)
+                    _total_workers += 3
                 self._nodes.append(
                     {
                         'web3_client': Web3(Web3.HTTPProvider(node.url)),
                         'web3_client_async': None,
                         'rpc_url': node.url,
                         'rate_limiter': AsyncLimiter(
-                            node.rate_limit.requests_per_second,
+                            max(1, (node.rate_limit.requests_per_second) // (_total_workers)),
                             1,
                         ),
                     },
@@ -308,7 +289,6 @@ class RpcHelper(object):
         async with self._nodes[node_idx]['rate_limiter']:
             return await coroutine
 
-    @acquire_rpc_semaphore
     async def get_current_block_number(self):
         """
         Returns:
@@ -343,7 +323,6 @@ class RpcHelper(object):
                 return current_block
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def get_transaction_receipt(self, tx_hash):
         """
         Retrieves the transaction receipt for a given transaction hash.
@@ -388,7 +367,6 @@ class RpcHelper(object):
                 return tx_receipt_details
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def get_current_block(self, node_idx=0):
         """
         Returns the current block number of the Ethereum blockchain.
@@ -428,7 +406,6 @@ class RpcHelper(object):
                 return current_block
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def web3_call(self, tasks, contract_addr, abi):
         """
         Calls the given tasks asynchronously using web3 and returns the response.
@@ -489,7 +466,6 @@ class RpcHelper(object):
                 raise exc
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def _make_rpc_jsonrpc_call(self, rpc_query):
         """
         Makes an RPC JSON-RPC call to a node in the pool.
@@ -796,7 +772,6 @@ class RpcHelper(object):
         response_data = await self._make_rpc_jsonrpc_call(rpc_query)
         return response_data
 
-    @acquire_rpc_semaphore
     async def get_events_logs(
         self, contract_address, to_block, from_block, topics, event_abi,
     ):

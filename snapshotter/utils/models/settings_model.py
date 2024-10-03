@@ -54,7 +54,6 @@ class RPCConfigFull(RPCConfigBase):
     """Full RPC configuration model."""
     skip_epoch_threshold_blocks: int
     polling_interval: int
-    semaphore_value: int = 20
 
 
 class RLimit(BaseModel):

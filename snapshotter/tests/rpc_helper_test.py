@@ -55,7 +55,6 @@ TEST_RPC_CONFIG = RPCConfigFull(
         ),
     ],
     connection_limits=settings.rpc.connection_limits,
-    semaphore_value=settings.rpc.semaphore_value,
     retry=settings.rpc.retry,
     force_archive_blocks=settings.rpc.force_archive_blocks,
     request_time_out=settings.rpc.request_time_out,
