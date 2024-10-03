@@ -91,6 +91,78 @@ async def get_project_finalized_cid(redis_conn: aioredis.Redis, state_contract_o
         return None
 
 
+async def get_project_finalized_cids_bulk(
+    redis_conn: aioredis.Redis,
+    state_contract_obj,
+    rpc_helper: RpcHelper,
+    epoch_ids: List[int],
+    project_id: str,
+) -> List[str]:
+    """
+    Retrieves CIDs for multiple epochs in bulk.
+
+    Args:
+        redis_conn (aioredis.Redis): Redis connection object.
+        state_contract_obj: Contract object for the state contract.
+        rpc_helper (RpcHelper): Helper object for making RPC calls.
+        epoch_ids (List[int]): List of epoch IDs.
+        project_id (str): Project ID.
+
+    Returns:
+        List[str]: List of CIDs.
+    """
+    batch_size = 100
+    epoch_ids_set = set(epoch_ids)
+    # Adjust epoch_id_min if it's less than the project's first epoch
+    project_first_epoch = await get_project_first_epoch(
+        redis_conn, state_contract_obj, rpc_helper, project_id,
+    )
+    epoch_id_min = min(epoch_ids)
+    epoch_id_max = max(epoch_ids)
+
+    if epoch_id_min < project_first_epoch:
+        logger.warning(
+            f'Min. Epoch ID: {epoch_id_min} is less than the project first epoch {project_first_epoch}.',
+            f'Cannot fetch CIDs for epochs before project first epoch.',
+        )
+        return None
+
+    # Check Redis cache for existing CIDs
+    cid_data_with_epochs = await redis_conn.zrangebyscore(
+        project_finalized_data_zset(project_id),
+        min=epoch_id_min,
+        max=epoch_id_max,
+    )
+    cid_data_with_epochs = [(cid.decode('utf-8'), int(epoch_id)) for cid, epoch_id in cid_data_with_epochs]
+
+    missing_epochs = list(epoch_ids_set.difference(set([epoch_id for _, epoch_id in cid_data_with_epochs])))
+
+    # batch_web3_contract_calls
+    if missing_epochs:
+        # Batch fetch CIDs from the blockchain
+        missing_cids_with_epochs = await w3_get_and_cache_finalized_cid_bulk(
+            redis_conn=redis_conn,
+            state_contract_obj=state_contract_obj,
+            rpc_helper=rpc_helper,
+            epoch_ids=missing_epochs,
+            project_id=project_id,
+        )
+
+    #     if not batch_cids or len(batch_cids) != len(missing_epochs):
+    #         # Handle incomplete CID retrieval
+    #         return []
+
+    #     # Cache the newly fetched CIDs
+    #     pipe = redis_conn.pipeline()
+    #     for epoch, cid in zip(missing_epochs, batch_cids):
+    #         pipe.zadd(project_finalized_data_zset(project_id), {cid: epoch})
+    #     await pipe.execute()
+
+    #     cids.extend(batch_cids)
+
+    # return cids
+
+
 @retry(
     reraise=True,
     retry=retry_if_exception_type(Exception),
@@ -146,6 +218,86 @@ async def w3_get_and_cache_finalized_cid(
             {f'null_{epoch_id}': epoch_id},
         )
         return f'null_{epoch_id}', epoch_id
+
+
+@retry(
+    reraise=True,
+    retry=retry_if_exception_type(Exception),
+    wait=wait_random_exponential(multiplier=1, max=10),
+    stop=stop_after_attempt(3),
+)
+async def w3_get_and_cache_finalized_cid_bulk(
+    redis_conn: aioredis.Redis,
+    state_contract_obj,
+    rpc_helper: RpcHelper,
+    epoch_ids: List[int],
+    project_id: str,
+):
+    """
+    Retrieves and caches the consensus status and max snapshot CID for multiple epochs of a given project.
+
+    This function interacts with the blockchain to get the snapshot status and CID for multiple epochs,
+    then caches the results in Redis. It supports both legacy v1 and new v2 protocols for consensus status.
+
+    Args:
+        redis_conn (aioredis.Redis): Redis connection object
+        state_contract_obj: Contract object for the protocol state contract
+        rpc_helper (RpcHelper): Helper object for making web3 calls
+        epoch_ids (List[int]): List of epoch IDs to fetch
+        project_id (str): Project ID
+
+    Returns:
+        List[Tuple[str, int]]: List of tuples containing (CID, epoch_id) for each epoch
+    """
+    try:
+        batch_size = 50  # 50 epoch_ids per batch (100 tasks per batch)
+        all_results = []
+
+        for i in range(0, len(epoch_ids), batch_size):
+            batch_epoch_ids = epoch_ids[i:i + batch_size]
+
+            # Prepare tasks for batch call
+            tasks = []
+            for epoch_id in batch_epoch_ids:
+                tasks.extend([
+                    ('snapshotStatus', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
+                    ('maxSnapshotsCid', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
+                ])
+
+            # Make batch call
+            batch_results = await rpc_helper.batch_web3_contract_calls(
+                tasks=tasks,
+                contract_obj=state_contract_obj,
+            )
+            all_results.extend(batch_results)
+
+        # Process results and prepare for caching
+        cids_with_epochs = []
+        redis_mapping = {}
+        for i in range(0, len(all_results), 2):
+            epoch_id = epoch_ids[i // 2]
+            consensus_status = all_results[i]
+            cid = all_results[i + 1]
+
+            if consensus_status[0] is not None:
+                redis_mapping[cid] = epoch_id
+                cids_with_epochs.append((cid, epoch_id))
+            else:
+                null_cid = f'null_{epoch_id}'
+                redis_mapping[null_cid] = epoch_id
+                cids_with_epochs.append((null_cid, epoch_id))
+
+        if redis_mapping:
+            await redis_conn.zadd(
+                project_finalized_data_zset(project_id),
+                redis_mapping,
+            )
+
+        return cids_with_epochs
+
+    except Exception as e:
+        logger.error(f'Error in w3_get_and_cache_finalized_cid_bulk: {str(e)}')
+        raise
 
 
 async def get_project_first_epoch(redis_conn: aioredis.Redis, state_contract_obj, rpc_helper: RpcHelper, project_id):
