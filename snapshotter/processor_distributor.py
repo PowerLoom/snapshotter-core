@@ -655,11 +655,6 @@ class ProcessorDistributor(multiprocessing.Process):
                     ),
                 )
 
-                if project_config.projects:
-                    self._logger.info(
-                        f'Sent out {len(project_config.projects)} {project_type} messages to be processed by snapshot builder worker'
-                        f' for epoch {epoch.epochId}',
-                    )
             results = await asyncio.gather(*queuing_tasks, return_exceptions=True)
             for result in results:
                 if isinstance(result, Exception):
@@ -667,6 +662,10 @@ class ProcessorDistributor(multiprocessing.Process):
                         'Error while sending message to queue. Error - {}',
                         result,
                     )
+            self._logger.info(
+                f'Sent out {len(project_config.projects)} messages to be processed by snapshot builder worker'
+                f' for epoch {epoch.epochId}',
+            )
 
     async def _enable_pending_projects_for_epoch(self, epoch_id) -> Set[str]:
         """
