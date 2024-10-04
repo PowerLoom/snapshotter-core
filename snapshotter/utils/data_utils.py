@@ -221,10 +221,10 @@ async def w3_get_and_cache_finalized_cid_bulk(
     project_id: str,
 ):
     """
-    Retrieves and caches the consensus status and max snapshot CID for multiple epochs of a given project.
+    Retrieves and caches the consensus status and snapshot CID for multiple epochs of a given project.
 
-    This function interacts with the blockchain to get the snapshot status and CID for multiple epochs,
-    then caches the results in Redis. It supports both legacy v1 and new v2 protocols for consensus status.
+    This function interacts with the blockchain to get the snapshot status for multiple epochs,
+    then caches the results in Redis.
 
     Args:
         redis_conn (aioredis.Redis): Redis connection object
@@ -237,19 +237,17 @@ async def w3_get_and_cache_finalized_cid_bulk(
         List[Tuple[str, int]]: List of tuples containing (CID, epoch_id) for each epoch
     """
     try:
-        batch_size = 50  # 50 epoch_ids per batch (100 tasks per batch)
+        batch_size = 50
         all_results = []
 
         for i in range(0, len(epoch_ids), batch_size):
             batch_epoch_ids = epoch_ids[i:i + batch_size]
 
             # Prepare tasks for batch call
-            tasks = []
-            for epoch_id in batch_epoch_ids:
-                tasks.extend([
-                    ('snapshotStatus', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
-                    ('maxSnapshotsCid', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
-                ])
+            tasks = [
+                ('snapshotStatus', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id])
+                for epoch_id in batch_epoch_ids
+            ]
 
             # Make batch call
             batch_results = await rpc_helper.batch_web3_contract_calls(
@@ -261,12 +259,13 @@ async def w3_get_and_cache_finalized_cid_bulk(
         # Process results and prepare for caching
         cids_with_epochs = []
         redis_mapping = {}
-        for i in range(0, len(all_results), 2):
-            epoch_id = epoch_ids[i // 2]
+        for i, epoch_id in enumerate(epoch_ids):
             consensus_status = all_results[i]
-            cid = all_results[i + 1]
 
-            if consensus_status[0] is not None:
+            # Extract status and CID from the ConsensusStatus struct
+            status, cid, _ = consensus_status
+
+            if status is not None:
                 redis_mapping[cid] = epoch_id
                 cids_with_epochs.append((cid, epoch_id))
             else:
