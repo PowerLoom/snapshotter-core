@@ -21,6 +21,7 @@ from snapshotter.utils.redis.redis_keys import source_chain_id_key
 from snapshotter.utils.rpc import RpcHelper
 
 logger = default_logger.bind(module='data_helper')
+BATCH_SIZE = 50
 
 
 def retry_state_callback(retry_state: tenacity.RetryCallState):
@@ -245,11 +246,10 @@ async def w3_get_and_cache_finalized_cid_bulk(
         List[Tuple[str, int]]: List of tuples containing (CID, epoch_id) for each epoch
     """
     try:
-        batch_size = 50
         all_results = []
 
-        for i in range(0, len(epoch_ids), batch_size):
-            batch_epoch_ids = epoch_ids[i:i + batch_size]
+        for i in range(0, len(epoch_ids), BATCH_SIZE):
+            batch_epoch_ids = epoch_ids[i:i + BATCH_SIZE]
 
             # Prepare tasks for batch call
             tasks = [
@@ -426,13 +426,12 @@ async def get_submission_data_bulk(
     Returns:
         List[dict]: List of submission data dictionaries.
     """
-    batch_size = 10
     all_snapshot_data = []
 
     # Process submissions in batches
-    for i in range(0, len(cids), batch_size):
-        batch_cids = cids[i:i + batch_size]
-        batch_project_ids = project_ids[i:i + batch_size]
+    for i in range(0, len(cids), BATCH_SIZE):
+        batch_cids = cids[i:i + BATCH_SIZE]
+        batch_project_ids = project_ids[i:i + BATCH_SIZE]
         batch_snapshot_data = await asyncio.gather(
             *[
                 get_submission_data(redis_conn, cid, ipfs_reader, project_id)
