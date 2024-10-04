@@ -384,3 +384,54 @@ async def test_get_project_finalized_cids_bulk_not_found(proxy_contract, data_ma
 
     # Clean slate Redis
     await mock_redis.flushall()
+
+
+@pytest.mark.asyncio(loop_scope='module')
+async def test_get_project_finalized_cids_bulk_partial(proxy_contract, data_market_contract, mock_redis, rpc_helper, project_id: str, epoch_ids: List[int]):
+    """
+    Test `get_project_finalized_cids_bulk` function when only partial data is available in Redis cache
+    and the rest needs to be fetched from the blockchain.
+    """
+    expected_cids = [f'CID{project_id}{epoch_id}' for epoch_id in epoch_ids]
+    new_data_market_address = data_market_contract.address
+
+    # Populate Redis with CIDs for every other epoch_id
+    redis_mapping = {
+        expected_cids[i]: epoch_ids[i]
+        for i in range(0, len(epoch_ids), 2)
+    }
+    await mock_redis.zadd(project_finalized_data_zset(project_id), redis_mapping)
+
+    # Verify that only partial data is in Redis
+    cached_cids = await mock_redis.zrange(
+        project_finalized_data_zset(project_id),
+        0,
+        -1,
+        withscores=True,
+    )
+    assert len(cached_cids) == len(epoch_ids) // 2, 'Only half of the CIDs should be cached in Redis initially'
+
+    with patch('snapshotter.utils.data_utils.settings.data_market', new_data_market_address):
+        cids = await get_project_finalized_cids_bulk(
+            redis_conn=mock_redis,
+            state_contract_obj=proxy_contract,
+            rpc_helper=rpc_helper,
+            epoch_ids=epoch_ids,
+            project_id=project_id,
+        )
+
+        assert cids == expected_cids
+
+        # Verify that all CIDs were added to Redis
+        stored_cids = await mock_redis.zrangebyscore(
+            project_finalized_data_zset(project_id),
+            min(epoch_ids),
+            max(epoch_ids),
+            withscores=True,
+        )
+        assert len(stored_cids) == len(expected_cids)
+        assert all(cid.decode('utf-8') in expected_cids for cid, _ in stored_cids)
+        assert all(int(epoch) in epoch_ids for _, epoch in stored_cids)
+
+    # Clean slate Redis
+    await mock_redis.flushall()
