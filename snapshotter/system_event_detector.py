@@ -115,10 +115,8 @@ class EventDetectorProcess(multiprocessing.Process):
         self._last_processed_block = None
         self._source_rpc_helper = RpcHelper(rpc_settings=settings.rpc)
         self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
-        self.contract_abi = read_json_file(
-            settings.protocol_state.abi,
-            self._logger,
-        )
+        self.contract_abi = None
+        self._logger = None
         self.contract_address = settings.protocol_state.address
 
         self._last_reporting_service_ping = 0
@@ -424,6 +422,10 @@ class EventDetectorProcess(multiprocessing.Process):
 
         self._logger = default_logger.bind(
             module='SystemEventDetector',
+        )
+        self.contract_abi = read_json_file(
+            settings.protocol_state.abi,
+            self._logger,
         )
         # Initialize the Redis pool
         self.ev_loop.run_until_complete(self._init_redis_pool())
