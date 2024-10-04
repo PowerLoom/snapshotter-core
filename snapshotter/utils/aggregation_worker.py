@@ -160,7 +160,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
                     self._redis_conn,
                 )
-            self._logger.debug(
+            self._logger.info(
                 'Got epoch to process for {}: {}',
                 task_type, msg_obj,
             )
@@ -180,7 +180,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
         except Exception as e:
             # Handle exceptions during processing
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
             )
@@ -284,7 +284,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             try:
                 msg_obj: PowerloomSnapshotSubmittedMessage = PowerloomSnapshotSubmittedMessage.parse_raw(message.body)
             except ValidationError as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Bad message structure of callback processor. Error: {}'
                     ),
@@ -292,7 +292,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 )
                 return
             except Exception as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Unexpected message structure of callback in processor. Error: {}'
                     ),
@@ -309,7 +309,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                     PowerloomCalculateAggregateMessage.parse_raw(message.body)
                 )
             except ValidationError as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Bad message structure of callback processor. Error: {}'
                     ),
@@ -317,7 +317,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 )
                 return
             except Exception as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Unexpected message structure of callback in processor. Error: {}'
                     ),

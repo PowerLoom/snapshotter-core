@@ -237,7 +237,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         )
         r.raise_for_status()
         resp = r.json()
-        self._logger.info('Uploaded snapshot to web3 storage: {} | Response: {}', snapshot, resp)
+        self._logger.debug('Uploaded snapshot to web3 storage: {} | Response: {}', snapshot, resp)
 
     @retry(
         wait=wait_random_exponential(multiplier=1, max=10),
@@ -341,7 +341,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         try:
             snapshot_cid = await self._upload_to_ipfs(snapshot_bytes, _ipfs_writer_client)
         except Exception as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception uploading snapshot to IPFS for epoch {}: {}, Error: {},'
                 'sending failure notifications', epoch, snapshot, e,
             )
@@ -397,7 +397,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                         )
 
             except Exception as e:
-                self._logger.opt(exception=True).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     'Exception sending snapshot submitted message to event detector queue: {} | Project: {} | Epoch: {} | Snapshot CID: {}',
                     e, project_id, epoch.epochId, snapshot_cid,
                 )
@@ -571,7 +571,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         if self._stream:
             try:
                 await self._stream.end()
-                self._logger.info('Closed stream')
+                self._logger.debug('Closed stream')
             except Exception as e:
                 self._logger.error(f'Error closing stream: {e}')
             finally:
@@ -638,7 +638,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         )
 
         msg = SnapshotSubmission(request=request_msg, signature=signature.hex(), header=current_block_hash)
-        self._logger.debug(
+        self._logger.info(
             'Snapshot submission created: {}', msg,
         )
 
@@ -655,7 +655,7 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         except Exception as e:
             self._logger.opt(
-                exception=True,
+                exception=settings.logs.debug_mode,
             ).error(f'Failed to send message: {e}')
             raise Exception(f'Failed to send message: {e}')
 
@@ -701,7 +701,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
             except Exception as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(f'Failed to send message: {e}')
+                self._logger.opt(exception=settings.logs.debug_mode).error(f'Failed to send message: {e}')
                 raise Exception(f'Failed to send message: {e}')
 
     async def _init_grpc(self):

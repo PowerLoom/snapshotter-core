@@ -102,7 +102,7 @@ def init_queue(
         ch.queue_bind(
             exchange=exchange_name, queue=queue_name, routing_key=routing_key,
         )
-    init_rmq_logger.debug(
+    init_rmq_logger.info(
         'Initialized RabbitMQ setup | Queue: {} | Exchange: {} | Routing Key: {}',
         queue_name,
         exchange_name,
@@ -132,7 +132,7 @@ def init_topic_exchange_and_queue(
     ch.exchange_declare(
         exchange=exchange_name, exchange_type='topic', durable=True,
     )
-    init_rmq_logger.debug(
+    init_rmq_logger.info(
         'Initialized RabbitMQ Topic exchange: {}', exchange_name,
     )
 
@@ -284,7 +284,7 @@ def init_exchanges_queues():
     ch.exchange_declare(
         exchange=exchange_name, exchange_type='direct', durable=True,
     )
-    init_rmq_logger.debug(
+    init_rmq_logger.info(
         'Initialized RabbitMQ Direct exchange: {}', exchange_name,
     )
 

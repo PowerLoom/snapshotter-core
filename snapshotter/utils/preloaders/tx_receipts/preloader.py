@@ -43,12 +43,12 @@ class TxPreloadWorker(DelegatorPreloaderAsyncWorker):
                 PowerloomDelegateTxReceiptWorkerResponseMessage.parse_raw(message)
             )
         except ValidationError:
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Bad message structure of txreceiptResponse',
             )
             return
         except Exception:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Unexpected message format of txreceiptResponse',
             )
             return

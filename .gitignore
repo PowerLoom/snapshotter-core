@@ -17,9 +17,6 @@ computes
 logs
 ipfs-data
 ipfs-export
-ipfs_data
-ipfs_export
-
 .coverage
 .pytest_cache
 .mypy_cache

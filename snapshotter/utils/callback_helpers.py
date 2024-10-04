@@ -89,9 +89,9 @@ def misc_notification_callback_result_handler(fut: asyncio.Future):
     try:
         r = fut.result()
     except Exception as e:
-        # Log the exception with full traceback if trace_enabled is True
-        if settings.logs.trace_enabled:
-            helper_logger.opt(exception=True).error(
+        # Log the exception with full traceback if debug_mode is True
+        if settings.logs.debug_mode:
+            helper_logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception while sending callback or notification: {}', e,
             )
         else:
@@ -113,9 +113,9 @@ def sync_notification_callback_result_handler(f: functools.partial):
     try:
         result = f()
     except Exception as exc:
-        # Log the exception with full traceback if trace_enabled is True
-        if settings.logs.trace_enabled:
-            helper_logger.opt(exception=True).error(
+        # Log the exception with full traceback if debug_mode is True
+        if settings.logs.debug_mode:
+            helper_logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception while sending callback or notification: {}', exc,
             )
         else:
