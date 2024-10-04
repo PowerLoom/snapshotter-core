@@ -280,9 +280,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
         self._logger.debug('task type: {}', task_type)
         # Process message based on task type
-        if msg_obj.epochId == 0:
-            self._logger.debug('Skipping aggregation snapshot for epoch 0. Incoming msg: {}', msg_obj)
-            return
         if task_type in self._single_project_types:
             try:
                 msg_obj: PowerloomSnapshotSubmittedMessage = PowerloomSnapshotSubmittedMessage.parse_raw(message.body)
@@ -327,7 +324,10 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                     e,
                 )
                 return
-
+            else:
+                if msg_obj.epochId == 0:
+                    self._logger.debug('Skipping aggregation snapshot for epoch 0. Incoming msg: {}', msg_obj)
+                    return
         else:
             self._logger.error(
                 'Unknown task type {}', task_type,
