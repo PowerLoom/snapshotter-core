@@ -18,6 +18,31 @@ from snapshotter.utils.models.settings_model import RPCNodeConfig
 from snapshotter.utils.redis.redis_keys import project_finalized_data_zset
 from snapshotter.utils.rpc import RpcHelper
 
+"""
+Data Utils Test Suite
+
+This test suite is designed to test the data utility functions in the snapshotter module,
+particularly focusing on CID retrieval and caching mechanisms.
+
+Requirements:
+- A local development Hardhat node is required to run these tests.
+- Tests use a mock Redis instance (FakeAsyncRedis) for simulating Redis operations.
+
+To run the tests:
+1. Ensure you have a local Hardhat node running (typically on http://127.0.0.1:8545).
+2. Run the tests using Poetry with the following command:
+   poetry run python -m pytest snapshotter/tests/data_utils_test.py
+
+What these tests cover:
+- Retrieval of project finalized CIDs (single and bulk)
+- Caching behavior with Redis
+- Interaction with smart contracts for CID retrieval
+- Edge cases such as missing data in cache
+
+Note: These tests use a custom RPC configuration (TEST_RPC_CONFIG) that points to the local Hardhat node.
+Ensure your local node matches this configuration.
+"""
+
 TEST_RPC_CONFIG = RPCConfigFull(
     full_nodes=[
         RPCNodeConfig(
