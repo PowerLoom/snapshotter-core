@@ -104,9 +104,6 @@ class EventDetectorProcess(multiprocessing.Process):
         self._rabbitmq_thread: threading.Thread
         self._rabbitmq_queue = queue.Queue()
         self._shutdown_initiated = False
-        self._logger = default_logger.bind(
-            module=f'{name}|{settings.namespace}-{settings.instance_id[:5]}',
-        )
 
         self._exchange = (
             f'{settings.rabbitmq.setup.event_detector.exchange}:{settings.namespace}'
@@ -425,6 +422,9 @@ class EventDetectorProcess(multiprocessing.Process):
         # Initialize the event loop
         self.ev_loop = asyncio.get_event_loop()
 
+        self._logger = default_logger.bind(
+            module='SystemEventDetector',
+        )
         # Initialize the Redis pool
         self.ev_loop.run_until_complete(self._init_redis_pool())
 
