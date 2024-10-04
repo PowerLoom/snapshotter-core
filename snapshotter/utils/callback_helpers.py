@@ -19,14 +19,13 @@ from redis import asyncio as aioredis
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.data_models import SnapshotterIssue
-from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import TelegramEpochProcessingReportMessage
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotSubmittedMessage
-from snapshotter.utils.redis.redis_keys import callback_last_sent_hset
+from snapshotter.utils.redis.redis_keys import callback_last_sent_by_issue
 from snapshotter.utils.rpc import RpcHelper
 
 # Setup logger for this module
@@ -146,16 +145,14 @@ async def send_failure_notifications_async(
     # Check if the last notification was sent within the minimum reporting interval
     caching_task = []
     if settings.reporting.min_reporting_interval > 0:
-        last_sent_timestamp = await redis_conn.hget(
-            callback_last_sent_hset(),
-            message.issueType,
+        last_sent_timestamp = await redis_conn.get(
+            callback_last_sent_by_issue(message.issueType),
         )
         if not last_sent_timestamp:
             caching_task.append(
-                redis_conn.hset(
-                    name=callback_last_sent_hset(),
-                    field=message.issueType,
-                    value=int(time.time()),
+                redis_conn.set(
+                    name=callback_last_sent_by_issue(message.issueType),
+                    value=message.timeOfReporting,
                     ex=settings.reporting.min_reporting_interval,
                 ),
             )
