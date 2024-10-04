@@ -661,7 +661,7 @@ async def get_project_epoch_snapshot_bulk(
         A list of snapshot data for the given project and epoch range.
     """
     cid_data = await get_project_finalized_cids_bulk(
-        redis_conn, state_contract_obj, rpc_helper, epoch_id_min, epoch_id_max, project_id,
+        redis_conn, state_contract_obj, rpc_helper, range(epoch_id_min, epoch_id_max + 1), project_id,
     )
 
     cid_data_with_epochs = zip(cid_data, range(epoch_id_min, epoch_id_max + 1))
