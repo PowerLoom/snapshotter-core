@@ -123,10 +123,11 @@ async def get_project_finalized_cids_bulk(
         project_finalized_data_zset(project_id),
         min=epoch_id_min,
         max=epoch_id_max,
+        withscores=True,
     )
     cid_data_with_epochs = [(cid.decode('utf-8'), int(epoch_id)) for cid, epoch_id in cid_data_with_epochs]
-
-    missing_epochs = list(epoch_ids_set.difference(set([epoch_id for _, epoch_id in cid_data_with_epochs])))
+    existing_epochs = set([epoch_id for _, epoch_id in cid_data_with_epochs])
+    missing_epochs = list(epoch_ids_set.difference(existing_epochs))
 
     # batch_web3_contract_calls
     if missing_epochs:
@@ -139,19 +140,14 @@ async def get_project_finalized_cids_bulk(
             project_id=project_id,
         )
 
-    #     if not batch_cids or len(batch_cids) != len(missing_epochs):
-    #         # Handle incomplete CID retrieval
-    #         return []
+        # Merge existing and missing CIDs
+        all_cids_with_epochs = cid_data_with_epochs + missing_cids_with_epochs
+        all_cids_with_epochs.sort(key=lambda x: x[1])
+    else:
+        all_cids_with_epochs = cid_data_with_epochs
 
-    #     # Cache the newly fetched CIDs
-    #     pipe = redis_conn.pipeline()
-    #     for epoch, cid in zip(missing_epochs, batch_cids):
-    #         pipe.zadd(project_finalized_data_zset(project_id), {cid: epoch})
-    #     await pipe.execute()
-
-    #     cids.extend(batch_cids)
-
-    # return cids
+    cids = [cid for cid, _ in all_cids_with_epochs]
+    return cids
 
 
 @retry(
