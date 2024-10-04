@@ -103,7 +103,7 @@ class ReportingConfig(BaseModel):
     service_url: str
     telegram_url: str
     telegram_chat_id: str
-    failure_report_frequency: int
+    min_reporting_interval: int
 
 
 class Redis(BaseModel):
