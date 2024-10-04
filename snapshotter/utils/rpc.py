@@ -552,7 +552,7 @@ class RpcHelper(object):
         try:
             # Make batch RPC call
             response_data = await self._make_rpc_jsonrpc_call(batch)
-
+            self._logger.info('response_data: {}', response_data)
             # Process responses
             results = []
             abi_dict = get_contract_abi_dict(contract_obj.abi)

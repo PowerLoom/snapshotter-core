@@ -86,7 +86,8 @@ async def get_project_finalized_cids_bulk(
     redis_conn: aioredis.Redis,
     state_contract_obj,
     rpc_helper: RpcHelper,
-    epoch_ids: List[int],
+    epoch_id_min: int,
+    epoch_id_max: int,
     project_id: str,
 ) -> List[str]:
     """
@@ -102,13 +103,10 @@ async def get_project_finalized_cids_bulk(
     Returns:
         List[str]: List of CIDs.
     """
-    epoch_ids_set = set(epoch_ids)
     # Adjust epoch_id_min if it's less than the project's first epoch
     project_first_epoch = await get_project_first_epoch(
         redis_conn, state_contract_obj, rpc_helper, project_id,
     )
-    epoch_id_min = min(epoch_ids)
-    epoch_id_max = max(epoch_ids)
 
     if epoch_id_min < project_first_epoch:
         logger.warning(
@@ -116,6 +114,8 @@ async def get_project_finalized_cids_bulk(
             f'Cannot fetch CIDs for epochs before project first epoch.',
         )
         return None
+
+    epoch_ids_set = set(range(epoch_id_min, epoch_id_max + 1))
 
     # Check Redis cache for existing CIDs
     cid_data_with_epochs = await redis_conn.zrangebyscore(
@@ -661,7 +661,7 @@ async def get_project_epoch_snapshot_bulk(
         A list of snapshot data for the given project and epoch range.
     """
     cid_data = await get_project_finalized_cids_bulk(
-        redis_conn, state_contract_obj, rpc_helper, range(epoch_id_min, epoch_id_max + 1), project_id,
+        redis_conn, state_contract_obj, rpc_helper, epoch_id_min, epoch_id_max, project_id,
     )
 
     cid_data_with_epochs = zip(cid_data, range(epoch_id_min, epoch_id_max + 1))
