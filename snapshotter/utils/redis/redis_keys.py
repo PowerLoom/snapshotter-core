@@ -281,3 +281,13 @@ def process_hub_core_start_timestamp():
         str: Redis key for the process hub core start timestamp.
     """
     return f'processHubCoreStartTimestamp:{settings.namespace}'
+
+
+def callback_last_sent_hset():
+    """
+    Generate Redis key for callback last sent timestamp. Stores the last sent timestamp for each issueType.
+
+    Returns:
+        str: Redis key for the callback last sent timestamp.
+    """
+    return f'callbackLastSentTimestamp:{settings.namespace}'
