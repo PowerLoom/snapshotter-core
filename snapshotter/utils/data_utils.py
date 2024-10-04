@@ -162,6 +162,8 @@ async def w3_get_and_cache_finalized_cid(
     rpc_helper: RpcHelper,
     epoch_id,
     project_id,
+    # NOTE: Setting it to true for now, but we will need to set it to false once validators are live.
+    use_pending: bool = True,
 ):
     """
     Retrieves the consensus status and the snapshot CID for a given project and epoch.
@@ -194,15 +196,18 @@ async def w3_get_and_cache_finalized_cid(
     status, cid, _ = consensus_status
 
     # Process and cache the result
-    if status is not None:
-        await redis_conn.zadd(
-            project_finalized_data_zset(project_id),
-            {cid: epoch_id},
-        )
-        return cid, epoch_id
+    null_cid = f'null_{epoch_id}'
+    if status is not None and cid:
+        if use_pending or status > 0:
+            await redis_conn.zadd(
+                project_finalized_data_zset(project_id),
+                {cid: epoch_id},
+            )
+            return cid, epoch_id
+        else:
+            return null_cid, epoch_id
     else:
         # Add null to zset if no consensus
-        null_cid = f'null_{epoch_id}'
         await redis_conn.zadd(
             project_finalized_data_zset(project_id),
             {null_cid: epoch_id},
@@ -222,6 +227,8 @@ async def w3_get_and_cache_finalized_cid_bulk(
     rpc_helper: RpcHelper,
     epoch_ids: List[int],
     project_id: str,
+    # NOTE: Setting it to true for now, but we will need to set it to false once validators are live.
+    use_pending: bool = True,
 ):
     """
     Retrieves and caches the consensus status and snapshot CID for multiple epochs of a given project.
@@ -268,11 +275,15 @@ async def w3_get_and_cache_finalized_cid_bulk(
             # Extract status and CID from the ConsensusStatus struct
             status, cid, _ = consensus_status
 
-            if status is not None:
-                redis_mapping[cid] = epoch_id
-                cids_with_epochs.append((cid, epoch_id))
+            null_cid = f'null_{epoch_id}'
+            if status is not None and cid:
+                if use_pending or status > 0:
+                    redis_mapping[cid] = epoch_id
+                    cids_with_epochs.append((cid, epoch_id))
+                else:
+                    redis_mapping[null_cid] = epoch_id
+                    cids_with_epochs.append((null_cid, epoch_id))
             else:
-                null_cid = f'null_{epoch_id}'
                 redis_mapping[null_cid] = epoch_id
                 cids_with_epochs.append((null_cid, epoch_id))
 
