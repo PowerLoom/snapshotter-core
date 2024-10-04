@@ -386,7 +386,7 @@ class ProcessorDistributor(multiprocessing.Process):
             self._preload_completion_conditions[epoch.epochId][k]
             for k in preloader_types_l
         ]
-        self._logger.debug(
+        self._logger.info(
             'Waiting for preload conditions against epoch {}: {}',
             epoch.epochId,
             conditions,
@@ -529,12 +529,12 @@ class ProcessorDistributor(multiprocessing.Process):
                 EpochBase.parse_raw(message.body)
             )
         except ValidationError:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Bad message structure of epoch callback',
             )
             return
         except Exception:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Unexpected message format of epoch callback',
             )
             return
@@ -589,7 +589,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     message=msg_body,
                 )
 
-                self._logger.debug(
+                self._logger.info(
                     'Sent out message to be processed by worker'
                     f' {project_type} : {process_unit}',
                 )
@@ -615,7 +615,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     f':{settings.instance_id}:EpochReleased.{project_type}',
                     message=msg_body,
                 )
-                self._logger.debug(
+                self._logger.info(
                     'Sent out message to be processed by worker'
                     f' {project_type} : {process_unit}',
                 )
@@ -656,7 +656,7 @@ class ProcessorDistributor(multiprocessing.Process):
                 )
 
                 if project_config.projects:
-                    self._logger.debug(
+                    self._logger.info(
                         f'Sent out {len(project_config.projects)} {project_type} messages to be processed by snapshot builder worker'
                         f' for epoch {epoch.epochId}',
                     )
@@ -778,7 +778,7 @@ class ProcessorDistributor(multiprocessing.Process):
         event_type = message.routing_key.split('.')[-1]
 
         if event_type == 'SnapshotFinalized':
-            self._logger.info(f'SnapshotFinalizedEvent caught with message {message}')
+            self._logger.debug(f'SnapshotFinalizedEvent caught with message {message}')
             msg_obj: PowerloomSnapshotFinalizedMessage = (
                 PowerloomSnapshotFinalizedMessage.parse_raw(message.body)
             )
@@ -826,12 +826,12 @@ class ProcessorDistributor(multiprocessing.Process):
             )
 
         except ValidationError:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Bad message structure of event callback',
             )
             return
         except Exception:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Unexpected message format of event callback',
             )
             return
@@ -884,7 +884,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     )
 
                     if not events:
-                        self._logger.info(f'No events found for {process_unit.epochId}')
+                        self._logger.debug(f'No events found for {process_unit.epochId}')
                         continue
 
                     event_project_ids = set()
@@ -955,7 +955,7 @@ class ProcessorDistributor(multiprocessing.Process):
         await message.ack()
 
         message_type = message.routing_key.split('.')[-1]
-        self._logger.debug(
+        self._logger.info(
             (
                 'Got message to process and distribute: {}'
             ),
@@ -993,7 +993,7 @@ class ProcessorDistributor(multiprocessing.Process):
             )
 
         elif message_type == 'SnapshotFinalized':
-            self._logger.info(f'SnapshotFinalizedEvent caught with message {message}')
+            self._logger.debug(f'SnapshotFinalizedEvent caught with message {message}')
             await self._cache_finalized_snapshot(
                 message,
             )

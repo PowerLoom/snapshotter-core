@@ -128,7 +128,7 @@ class RedisReader(BaseModel):
 
 class Logs(BaseModel):
     """Logging configuration model."""
-    trace_enabled: bool
+    debug_mode: bool
     write_to_files: bool
 
 

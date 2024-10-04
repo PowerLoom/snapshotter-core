@@ -7,6 +7,7 @@ from async_limits.storage import AsyncRedisStorage
 from async_limits.strategies import AsyncFixedWindowRateLimiter
 from redis import asyncio as aioredis
 
+from snapshotter.settings.config import settings
 from snapshotter.utils.exceptions import RPCException
 
 # Initialize rate limits when program starts
@@ -165,7 +166,7 @@ async def check_rpc_rate_limit(
             limit_incr_by,
         )
     except Exception as exc:
-        logger.opt(exception=True).error(
+        logger.opt(exception=settings.logs.debug_mode).error(
             (
                 'Caught exception on rate limiter operations: {} | Bypassing'
                 ' rate limit check '

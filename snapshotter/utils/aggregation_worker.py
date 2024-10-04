@@ -160,7 +160,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
                     self._redis_conn,
                 )
-            self._logger.debug(
+            self._logger.info(
                 'Got epoch to process for {}: {}',
                 task_type, msg_obj,
             )
@@ -180,7 +180,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
         except Exception as e:
             # Handle exceptions during processing
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
             )
@@ -280,11 +280,14 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
         self._logger.debug('task type: {}', task_type)
         # Process message based on task type
+        if msg_obj.epochId == 0:
+            self._logger.debug('Skipping aggregation snapshot for epoch 0. Incoming msg: {}', msg_obj)
+            return
         if task_type in self._single_project_types:
             try:
                 msg_obj: PowerloomSnapshotSubmittedMessage = PowerloomSnapshotSubmittedMessage.parse_raw(message.body)
             except ValidationError as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Bad message structure of callback processor. Error: {}'
                     ),
@@ -292,7 +295,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 )
                 return
             except Exception as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Unexpected message structure of callback in processor. Error: {}'
                     ),
@@ -309,7 +312,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                     PowerloomCalculateAggregateMessage.parse_raw(message.body)
                 )
             except ValidationError as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Bad message structure of callback processor. Error: {}'
                     ),
@@ -317,17 +320,14 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 )
                 return
             except Exception as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Unexpected message structure of callback in processor. Error: {}'
                     ),
                     e,
                 )
                 return
-            else:
-                if msg_obj.epochId == 0:
-                    self._logger.debug('Skipping aggregation snapshot for epoch 0. Incoming msg: {}', msg_obj)
-                    return
+
         else:
             self._logger.error(
                 'Unknown task type {}', task_type,

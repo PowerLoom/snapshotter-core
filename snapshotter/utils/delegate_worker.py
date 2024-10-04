@@ -100,7 +100,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
                 response_msg=result,
             )
         except Exception as e:
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception while processing tx receipt fetch for {}: {}', msg_obj, e,
             )
 
@@ -162,7 +162,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
                 )
 
         except Exception as e:
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Exception sending message to delegate :'
                     ' {} | dump: {}'
@@ -197,7 +197,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             await message.ack()
 
         except ValidationError as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Bad message structure of callback processor. Error: {}, {}'
                 ),
@@ -205,7 +205,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             )
             return
         except Exception as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Unexpected message structure of callback in processor. Error: {}'
                 ),

@@ -331,7 +331,7 @@ async def get_project_first_epoch(redis_conn: aioredis.Redis, state_contract_obj
             contract_addr=state_contract_obj.address,
             abi=state_contract_obj.abi,
         )
-        logger.info(f'first epoch for project {project_id} is {first_epoch}')
+        logger.debug(f'first epoch for project {project_id} is {first_epoch}')
 
         # Cache the result if it's not 0
         if first_epoch != 0:

@@ -164,7 +164,7 @@ def provide_redis_conn_repsawning_thread(fn):
                         )
                         _ = fn(self, *args, **kwargs)
                 except Exception as e:
-                    logger.opt(exception=True).error(e)
+                    logger.opt(exception=settings.logs.debug_mode).error(e)
                     send_failure_notifications_sync(
                         client=self._httpx_client,
                         message=SnapshotterIssue(
@@ -202,7 +202,7 @@ def provide_async_redis_conn(fn):
         try:
             return await fn(*args, **kwargs)
         except Exception as e:
-            logger.opt(exception=True).error(e)
+            logger.opt(exception=settings.logs.debug_mode).error(e)
             return {'error': 'Internal Server Error'}
         finally:
             kwargs['request'].app.redis_pool.release(redis_conn_raw)

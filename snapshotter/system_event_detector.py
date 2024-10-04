@@ -64,11 +64,11 @@ def rabbitmq_and_redis_cleanup(fn):
                         ),
                     )
             except Exception as E:
-                self._logger.opt(exception=True).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     'Error while saving progress: {}', E,
                 )
         except Exception as E:
-            self._logger.opt(exception=True).error('Error while running: {}', E)
+            self._logger.opt(exception=settings.logs.debug_mode).error('Error while running: {}', E)
         finally:
             self._logger.debug('Shutting down!')
             sys.exit(0)
@@ -134,14 +134,14 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         while True:
             self._logger.info('Waiting for simulation completion...')
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)
 
     async def init(self):
         """
         Initializes the EventDetectorProcess by waiting for local collector initialization,
         broadcasting simulation submission, and waiting for simulation completion.
         """
-        self._logger.info(
+        self._logger.debug(
             'Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 15 seconds...',
         )
         await asyncio.sleep(15)
@@ -154,7 +154,7 @@ class EventDetectorProcess(multiprocessing.Process):
         except Exception as e:
             self._logger.error('Error while waiting for simulation completion: {}', e)
         finally:
-            self._logger.info('Breaking out of simulation completion wait loop...')
+            self._logger.debug('Breaking out of simulation completion wait loop...')
         # TODO: move simulation completion check to a separate cache entry or check on a contract entry
         # poll for simulation completion
         self._simulation_completed = True
@@ -163,7 +163,7 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         Prepares and broadcasts the simulation submission event.
         """
-        self._logger.info('⏳Preparing simulation submission...')
+        self._logger.debug('⏳Preparing simulation submission...')
         current_block_number = await self._source_rpc_helper.get_current_block_number()
 
         event = EpochReleasedEvent(
@@ -239,8 +239,10 @@ class EventDetectorProcess(multiprocessing.Process):
                 last_epoch_detected_epoch_id_key(),
                 latest_epoch_id,
             )
-
-        self._logger.info('Events detected in block range on Prost network {}-{}: {}', from_block, to_block, events)
+        if events:
+            self._logger.info('Events detected in block range on Prost network {}-{}: {}', from_block, to_block, events)
+        else:
+            self._logger.debug('No events detected in block range on Prost network {}-{}', from_block, to_block)
         return events
 
     def _interactor_wrapper(self, q: queue.Queue):
@@ -288,7 +290,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 'Skipping event broadcast to RabbitMQ for epoch {} as simulation is not complete. Incoming event: {}', event.epochId, event,
             )
             return
-        self._logger.info('Broadcasting event: {}', event)
+        self._logger.debug('Broadcasting event: {}', event)
         brodcast_msg = (
             event.json().encode('utf-8'),
             self._exchange,
@@ -305,10 +307,10 @@ class EventDetectorProcess(multiprocessing.Process):
         while True:
             try:
                 current_block = await self._anchor_rpc_helper.get_current_block()
-                self._logger.info('Current block: {}', current_block)
+                self._logger.debug('Current block: {}', current_block)
 
             except Exception as e:
-                self._logger.opt(exception=True).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Unable to fetch current block, ERROR: {}, '
                         'sleeping for {} seconds.'
@@ -332,7 +334,7 @@ class EventDetectorProcess(multiprocessing.Process):
                     )
 
             if self._last_processed_block == current_block:
-                self._logger.info(
+                self._logger.debug(
                     'No new blocks detected, sleeping for {} seconds...',
                     settings.rpc.polling_interval,
                 )
@@ -351,7 +353,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 try:
                     events = await self.get_events(self._last_processed_block + 1, current_block)
                 except Exception as e:
-                    self._logger.opt(exception=True).error(
+                    self._logger.opt(exception=settings.logs.debug_mode).error(
                         (
                             'Unable to fetch events from block {} to block {}, '
                             'ERROR: {}, sleeping for {} seconds.'
@@ -372,7 +374,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 try:
                     events = await self.get_events(current_block, current_block)
                 except Exception as e:
-                    self._logger.opt(exception=True).error(
+                    self._logger.opt(exception=settings.logs.debug_mode).error(
                         (
                             'Unable to fetch events from block {} to block {}, '
                             'ERROR: {}, sleeping for {} seconds.'
@@ -386,7 +388,7 @@ class EventDetectorProcess(multiprocessing.Process):
                     continue
 
             for event_type, event in events:
-                self._logger.info(
+                self._logger.debug(
                     'Processing event: {}', event,
                 )
                 self._broadcast_event(event_type, event)
@@ -394,11 +396,11 @@ class EventDetectorProcess(multiprocessing.Process):
             self._last_processed_block = current_block
 
             await self._redis_conn.set(event_detector_last_processed_block, json.dumps(current_block))
-            self._logger.info(
+            self._logger.debug(
                 'DONE: Processed blocks till, saving in redis: {}',
                 current_block,
             )
-            self._logger.info(
+            self._logger.debug(
                 'Sleeping for {} seconds...',
                 settings.rpc.polling_interval,
             )

@@ -131,7 +131,9 @@ def acquire_rpc_semaphore(fn):
             result = await fn(self, *args, **kwargs)
             return result
         except Exception as e:
-            logger.opt(exception=True).error('Error in asyncio semaphore acquisition decorator: {}', e)
+            logger.opt(exception=settings.logs.debug_mode).error(
+                'Error in asyncio semaphore acquisition decorator: {}', e,
+            )
             raise e
         finally:
             sem.release()
@@ -193,8 +195,8 @@ class RpcHelper(object):
             node['web3_client_async'] = AsyncWeb3(
                 AsyncHTTPProvider(node['rpc_url']),
             )
-            self._logger.info('Loaded async web3 provider for node {}: {}', node['rpc_url'], node['web3_client_async'])
-        self._logger.info('Post async web3 provider loading: {}', self._nodes)
+            self._logger.debug('Loaded async web3 provider for node {}: {}', node['rpc_url'], node['web3_client_async'])
+        self._logger.debug('Post async web3 provider loading: {}', self._nodes)
 
     async def init(self):
         """
@@ -218,13 +220,13 @@ class RpcHelper(object):
                     node['web3_client_async'] = AsyncWeb3(
                         AsyncHTTPProvider(node['rpc_url']),
                     )
-                    self._logger.info(
+                    self._logger.debug(
                         'Loaded async web3 provider for node {}: {}',
                         node['rpc_url'], node['web3_client_async'],
                     )
-                self._logger.info('Post async web3 provider loading: {}', self._nodes)
+                self._logger.debug('Post async web3 provider loading: {}', self._nodes)
                 self._initialized = True
-                self._logger.info('RPC client initialized')
+                self._logger.debug('RPC client initialized')
             else:
                 self._logger.error('No full nor archive nodes found in config')
 
@@ -270,14 +272,14 @@ class RpcHelper(object):
                     },
                 )
             except Exception as exc:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Error while initialising one of the web3 providers,'
                         f' err_msg: {exc}'
                     ),
                 )
             else:
-                self._logger.info('Loaded blank node settings for node {}', node.url)
+                self._logger.debug('Loaded blank node settings for node {}', node.url)
         self._node_count = len(self._nodes)
         self._sync_nodes_initialized = True
 
@@ -494,7 +496,7 @@ class RpcHelper(object):
                     underlying_exception=e,
                     extra_info={'msg': str(e)},
                 )
-                self._logger.opt(exception=settings.logs.trace_enabled).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Error while making web3 batch call'
                     ),
@@ -552,7 +554,6 @@ class RpcHelper(object):
         try:
             # Make batch RPC call
             response_data = await self._make_rpc_jsonrpc_call(batch)
-            self._logger.info('response_data: {}', response_data)
             # Process responses
             results = []
             abi_dict = get_contract_abi_dict(contract_obj.abi)
