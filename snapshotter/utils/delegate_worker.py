@@ -15,6 +15,7 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.generic_worker import GenericAsyncWorker
 from snapshotter.utils.models.data_models import DelegateTaskProcessorIssue
+from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
 from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 
@@ -107,7 +108,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             # Prepare and send failure notification
             notification_message = DelegateTaskProcessorIssue(
                 instanceID=settings.instance_id,
-                issueType='DELEGATE_TASK_FAILURE',
+                issueType=SnapshotterReportState.DELEGATE_TASK_FAILURE.value,
                 epochId=msg_obj.epochId,
                 timeOfReporting=time.time(),
                 exception=json.dumps({'issueDetails': f'Error : {e}'}),
@@ -116,6 +117,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             await send_failure_notifications_async(
                 client=self._client,
                 message=notification_message,
+                redis_conn=self._redis_conn,
             )
         finally:
             await self._redis_conn.close()
