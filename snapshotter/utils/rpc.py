@@ -24,6 +24,7 @@ from web3 import AsyncHTTPProvider
 from web3 import AsyncWeb3
 from web3 import Web3
 from web3._utils.events import get_event_data
+from web3.contract import AsyncContract
 
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
@@ -506,7 +507,7 @@ class RpcHelper(object):
     async def batch_web3_contract_calls(
         self,
         tasks: List[Tuple[str, List[Any]]],
-        contract_obj: Web3.eth.contract.Contract,
+        contract_obj: AsyncContract,
         block_override: Optional[List[int]] = None,
     ) -> List[Any]:
         """
@@ -515,43 +516,42 @@ class RpcHelper(object):
         Args:
             contract_obj: Web3 contract object.
             tasks: List of tuples, each containing (function_name, function_args).
+            block_override: Optional list of block numbers to override 'latest' for each call.
 
         Returns:
             List[Any]: List of results from the batch call.
         """
 
         if block_override and len(block_override) != len(tasks):
-            self._logger.warning(
-                'Block override length {} is not equal to the number of tasks {}. Ignoring block override.',
+            self._logger.error(
+                'Block override length {} is not equal to the number of tasks {}.',
                 len(block_override), len(tasks),
             )
-            block_override = None
+            raise ValueError('Block override length is not equal to the number of tasks')
 
         # Prepare batch request
         batch = []
         req_id = 1
         for i, task in enumerate(tasks):
-            block = block_override[i] if block_override else 'latest'
+            block = hex(block_override[i]) if block_override else 'latest'
             function = contract_obj.functions[task[0]]
-            transaction = function(*task[1]).build_transaction({
-                'gas': 0,
-                'gasPrice': 0,
-                'nonce': 0,
-                'from': '0x0000000000000000000000000000000000000000',
-            })
+            call_data = function(*task[1])._encode_transaction_data()
             batch.append({
                 'jsonrpc': '2.0',
                 'method': 'eth_call',
-                'params': [transaction, block],
+                'params': [
+                    {
+                        'to': contract_obj.address,
+                        'data': call_data,
+                    }, block,
+                ],
                 'id': req_id,
             })
             req_id += 1
 
         try:
             # Make batch RPC call
-            response_data = await self._rate_limited_call(
-                self._make_rpc_jsonrpc_call(batch),
-            )
+            response_data = await self._make_rpc_jsonrpc_call(batch)
 
             # Process responses
             results = []
