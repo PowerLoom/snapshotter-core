@@ -90,6 +90,22 @@ async def web3():
 
 
 @async_fixture(scope='module')
+async def snapshot(web3: AsyncWeb3):
+    # Take a snapshot of the current state
+    snapshot_id = await web3.provider.make_request('evm_snapshot', [])
+    print(f'Snapshot created with ID: {snapshot_id}')
+
+    yield snapshot_id['result']
+
+    # Revert to the snapshot after all tests are done
+    revert_result = await web3.provider.make_request('evm_revert', [snapshot_id['result']])
+    print(f'Snapshot revert result: {revert_result}')
+
+    if not revert_result['result']:
+        raise Exception('Snapshot revert failed')
+
+
+@async_fixture(scope='module')
 async def project_id():
     yield 'test_project_id'
 
@@ -100,7 +116,7 @@ async def epoch_ids():
 
 
 @async_fixture(scope='module')
-async def proxy_contract(web3: AsyncWeb3):
+async def proxy_contract(web3: AsyncWeb3, snapshot):
     """Deploy the Proxy contract and return the contract instance."""
     accounts = await web3.eth.accounts
     owner = accounts[0]
