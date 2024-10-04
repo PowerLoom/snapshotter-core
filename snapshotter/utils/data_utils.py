@@ -102,7 +102,6 @@ async def get_project_finalized_cids_bulk(
     Returns:
         List[str]: List of CIDs.
     """
-    batch_size = 100
     epoch_ids_set = set(epoch_ids)
     # Adjust epoch_id_min if it's less than the project's first epoch
     project_first_epoch = await get_project_first_epoch(
@@ -146,8 +145,7 @@ async def get_project_finalized_cids_bulk(
     else:
         all_cids_with_epochs = cid_data_with_epochs
 
-    cids = [cid for cid, _ in all_cids_with_epochs]
-    return cids
+    return [cid for cid, _ in all_cids_with_epochs]
 
 
 @retry(
@@ -662,42 +660,11 @@ async def get_project_epoch_snapshot_bulk(
     Returns:
         A list of snapshot data for the given project and epoch range.
     """
-    batch_size = 100
-
-    # Adjust epoch_id_min if it's less than the project's first epoch
-    project_first_epoch = await get_project_first_epoch(
-        redis_conn, state_contract_obj, rpc_helper, project_id,
-    )
-    if epoch_id_min < project_first_epoch:
-        epoch_id_min = project_first_epoch
-
-    # Fetch data from Redis cache
-    cid_data_with_epochs = await redis_conn.zrangebyscore(
-        project_finalized_data_zset(project_id),
-        epoch_id_min,
-        epoch_id_max,
-        withscores=True,
+    cid_data = await get_project_finalized_cids_bulk(
+        redis_conn, state_contract_obj, rpc_helper, epoch_id_min, epoch_id_max, project_id,
     )
 
-    cid_data_with_epochs = [(cid.decode('utf-8'), int(epoch_id)) for cid, epoch_id in cid_data_with_epochs]
-
-    # Identify missing epochs
-    all_epochs = set(range(epoch_id_min, epoch_id_max + 1))
-    missing_epochs = list(all_epochs.difference(set([epoch_id for _, epoch_id in cid_data_with_epochs])))
-    if missing_epochs:
-        logger.info('found {} missing_epochs, fetching from contract', len(missing_epochs))
-
-    # Fetch missing epochs in batches
-    for i in range(0, len(missing_epochs), batch_size):
-        tasks = [
-            get_project_finalized_cid(
-                redis_conn, state_contract_obj, rpc_helper, epoch_id, project_id,
-            ) for epoch_id in missing_epochs[i:i + batch_size]
-        ]
-
-        batch_cid_data_with_epochs = list(zip(await asyncio.gather(*tasks), missing_epochs))
-        cid_data_with_epochs += batch_cid_data_with_epochs
-
+    cid_data_with_epochs = zip(cid_data, range(epoch_id_min, epoch_id_max + 1))
     # Filter out null CIDs
     valid_cid_data_with_epochs = [
         (cid, epoch_id) for cid, epoch_id in cid_data_with_epochs
