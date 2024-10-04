@@ -164,7 +164,7 @@ async def w3_get_and_cache_finalized_cid(
     project_id,
 ):
     """
-    Retrieves the consensus status and the max snapshot CID for a given project and epoch.
+    Retrieves the consensus status and the snapshot CID for a given project and epoch.
 
     This function interacts with the blockchain to get the snapshot status and CID, then caches the result in Redis.
     It supports both legacy v1 and new v2 protocols for consensus status.
@@ -177,22 +177,24 @@ async def w3_get_and_cache_finalized_cid(
         project_id (int): Project ID
 
     Returns:
-        Tuple[str, int]: The CID and epoch ID if the consensus status is True, or the null value and epoch ID if the consensus status is False.
+        Tuple[str, int]: The CID and epoch ID if the consensus status is not PENDING, or the null value and epoch ID if the consensus status is PENDING.
     """
 
     # Fetch consensus status and CID from the blockchain
-    [consensus_status, cid] = await rpc_helper.web3_call(
+    [consensus_status] = await rpc_helper.web3_call(
         tasks=[
             ('snapshotStatus', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
-            ('maxSnapshotsCid', [Web3.to_checksum_address(settings.data_market), project_id, epoch_id]),
         ],
         contract_addr=state_contract_obj.address,
         abi=state_contract_obj.abi,
     )
     logger.trace(f'consensus status for project {project_id} and epoch {epoch_id} is {consensus_status}')
 
+    # Extract status and CID from the ConsensusStatus struct
+    status, cid, _ = consensus_status
+
     # Process and cache the result
-    if consensus_status[0] is not None:
+    if status is not None:
         await redis_conn.zadd(
             project_finalized_data_zset(project_id),
             {cid: epoch_id},
@@ -200,11 +202,12 @@ async def w3_get_and_cache_finalized_cid(
         return cid, epoch_id
     else:
         # Add null to zset if no consensus
+        null_cid = f'null_{epoch_id}'
         await redis_conn.zadd(
             project_finalized_data_zset(project_id),
-            {f'null_{epoch_id}': epoch_id},
+            {null_cid: epoch_id},
         )
-        return f'null_{epoch_id}', epoch_id
+        return null_cid, epoch_id
 
 
 @retry(
