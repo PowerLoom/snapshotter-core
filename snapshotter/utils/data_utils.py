@@ -411,6 +411,7 @@ async def get_submission_data_bulk(
     cids: List[str],
     ipfs_reader,
     project_ids: List[str],
+    ensure_complete: bool = False,
 ) -> List[dict]:
     """
     Retrieves submission data for multiple submissions in bulk.
@@ -438,6 +439,16 @@ async def get_submission_data_bulk(
                 for cid, project_id in zip(batch_cids, batch_project_ids)
             ],
         )
+
+        if ensure_complete:
+            missing_cids = [
+                cid for cid, data in zip(batch_cids, batch_snapshot_data)
+                if data == dict()
+            ]
+            if missing_cids:
+                logger.error(f'Incomplete ipfs data for CIDs: {missing_cids}')
+                return []
+
         all_snapshot_data.extend(batch_snapshot_data)
 
     return all_snapshot_data
@@ -640,6 +651,7 @@ async def get_project_epoch_snapshot_bulk(
         epoch_id_min: int,
         epoch_id_max: int,
         project_id,
+        ensure_complete: bool = False,
 ):
     """
     Fetches the snapshot data for a given project and epoch range.
@@ -670,12 +682,17 @@ async def get_project_epoch_snapshot_bulk(
         if cid and 'null' not in cid
     ]
 
+    if ensure_complete and len(valid_cid_data_with_epochs) != epoch_id_max - epoch_id_min + 1:
+        logger.error(f'Incomplete cids found for project {project_id} from epoch {epoch_id_min} to {epoch_id_max}')
+        return []
+
     # Fetch snapshot data in bulk
     all_snapshot_data = await get_submission_data_bulk(
         redis_conn,
         [cid for cid, _ in valid_cid_data_with_epochs],
         ipfs_reader,
         [project_id] * len(valid_cid_data_with_epochs),
+        ensure_complete=ensure_complete,
     )
 
     return all_snapshot_data

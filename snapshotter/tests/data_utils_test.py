@@ -1,6 +1,7 @@
 import json
 import os
 from typing import List
+from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 import pytest
@@ -10,11 +11,14 @@ from web3 import AsyncWeb3
 from web3.providers.async_rpc import AsyncHTTPProvider
 
 from snapshotter.settings.config import settings
+from snapshotter.utils.data_utils import get_project_epoch_snapshot_bulk
 from snapshotter.utils.data_utils import get_project_finalized_cid
 from snapshotter.utils.data_utils import get_project_finalized_cids_bulk
+from snapshotter.utils.data_utils import get_submission_data_bulk
 from snapshotter.utils.models.settings_model import RateLimitConfig
 from snapshotter.utils.models.settings_model import RPCConfigFull
 from snapshotter.utils.models.settings_model import RPCNodeConfig
+from snapshotter.utils.redis.redis_keys import cid_not_found_key
 from snapshotter.utils.redis.redis_keys import project_finalized_data_zset
 from snapshotter.utils.rpc import RpcHelper
 
@@ -261,6 +265,14 @@ async def rpc_helper(web3):
     return helper
 
 
+@async_fixture(scope='module')
+async def ipfs_reader():
+    """Initialize a mock IPFS reader for testing."""
+    reader = AsyncMock()
+    reader.cat = AsyncMock(return_value=json.dumps({'key': 'value'}).encode('utf-8'))
+    yield reader
+
+
 @pytest.mark.asyncio(loop_scope='module')
 async def test_get_project_finalized_cid_success(proxy_contract, data_market_contract, mock_redis, web3, rpc_helper, project_id: str):
     """
@@ -323,22 +335,29 @@ async def test_get_project_finalized_cid_not_found(proxy_contract, data_market_c
             epoch_id,
             epoch_id,
         )
-        assert stored_cid.decode('utf-8') == expected_cid
+        assert stored_cid and stored_cid.decode('utf-8') == expected_cid
 
-        # clean slate redis
-        await mock_redis.flushall()
+    # clean slate redis
+    await mock_redis.flushall()
 
 
 @pytest.mark.asyncio(loop_scope='module')
-async def test_get_project_finalized_cids_bulk_success(proxy_contract, data_market_contract, mock_redis, rpc_helper, project_id: str, epoch_ids: List[int]):
+async def test_get_project_finalized_cids_bulk_success(
+    proxy_contract,
+    data_market_contract,
+    mock_redis,
+    rpc_helper,
+    project_id: str,
+    epoch_ids: List[int],
+):
     """
     Test `get_project_finalized_cids_bulk` function for bulk CID retrieval.
     """
     expected_cids = [f'CID{project_id}{epoch_id}' for epoch_id in epoch_ids]
 
     # Populate Redis with cached CIDs
-    for i in range(len(expected_cids)):
-        await mock_redis.zadd(project_finalized_data_zset(project_id), {expected_cids[i]: epoch_ids[i]})
+    for cid, epoch_id in zip(expected_cids, epoch_ids):
+        await mock_redis.zadd(project_finalized_data_zset(project_id), {cid: epoch_id})
 
     new_data_market_address = data_market_contract.address
 
@@ -347,7 +366,8 @@ async def test_get_project_finalized_cids_bulk_success(proxy_contract, data_mark
             redis_conn=mock_redis,
             state_contract_obj=proxy_contract,
             rpc_helper=rpc_helper,
-            epoch_ids=epoch_ids,
+            epoch_id_min=min(epoch_ids),
+            epoch_id_max=max(epoch_ids),
             project_id=project_id,
         )
 
@@ -368,7 +388,14 @@ async def test_get_project_finalized_cids_bulk_success(proxy_contract, data_mark
 
 
 @pytest.mark.asyncio(loop_scope='module')
-async def test_get_project_finalized_cids_bulk_not_found(proxy_contract, data_market_contract, mock_redis, rpc_helper, project_id: str, epoch_ids: List[int]):
+async def test_get_project_finalized_cids_bulk_not_found(
+    proxy_contract,
+    data_market_contract,
+    mock_redis,
+    rpc_helper,
+    project_id: str,
+    epoch_ids: List[int],
+):
     """
     Test `get_project_finalized_cids_bulk` function when CIDs are not found in Redis cache
     and need to be fetched from the blockchain.
@@ -390,7 +417,8 @@ async def test_get_project_finalized_cids_bulk_not_found(proxy_contract, data_ma
             redis_conn=mock_redis,
             state_contract_obj=proxy_contract,
             rpc_helper=rpc_helper,
-            epoch_ids=epoch_ids,
+            epoch_id_min=min(epoch_ids),
+            epoch_id_max=max(epoch_ids),
             project_id=project_id,
         )
 
@@ -412,7 +440,14 @@ async def test_get_project_finalized_cids_bulk_not_found(proxy_contract, data_ma
 
 
 @pytest.mark.asyncio(loop_scope='module')
-async def test_get_project_finalized_cids_bulk_partial(proxy_contract, data_market_contract, mock_redis, rpc_helper, project_id: str, epoch_ids: List[int]):
+async def test_get_project_finalized_cids_bulk_partial(
+    proxy_contract,
+    data_market_contract,
+    mock_redis,
+    rpc_helper,
+    project_id: str,
+    epoch_ids: List[int],
+):
     """
     Test `get_project_finalized_cids_bulk` function when only partial data is available in Redis cache
     and the rest needs to be fetched from the blockchain.
@@ -434,14 +469,15 @@ async def test_get_project_finalized_cids_bulk_partial(proxy_contract, data_mark
         -1,
         withscores=True,
     )
-    assert len(cached_cids) == len(epoch_ids) // 2, 'Only half of the CIDs should be cached in Redis initially'
+    assert len(cached_cids) == len(redis_mapping), 'Only some of the CIDs should be cached in Redis initially'
 
     with patch('snapshotter.utils.data_utils.settings.data_market', new_data_market_address):
         cids = await get_project_finalized_cids_bulk(
             redis_conn=mock_redis,
             state_contract_obj=proxy_contract,
             rpc_helper=rpc_helper,
-            epoch_ids=epoch_ids,
+            epoch_id_min=min(epoch_ids),
+            epoch_id_max=max(epoch_ids),
             project_id=project_id,
         )
 
@@ -460,3 +496,165 @@ async def test_get_project_finalized_cids_bulk_partial(proxy_contract, data_mark
 
     # Clean slate Redis
     await mock_redis.flushall()
+
+
+@pytest.mark.asyncio(loop_scope='module')
+async def test_get_submission_data_bulk_ensure_complete_true(
+    mock_redis,
+    project_id: str,
+    ipfs_reader,
+    epoch_ids: List[int],
+):
+    """
+    Test `get_submission_data_bulk` function with ensure_complete=True.
+    Ensures that if any CID fetch fails, the function returns an empty list.
+    """
+    # Arrange
+    cids = [f'invalid_cid{epoch_id}' for epoch_id in epoch_ids]
+    ipfs_reader.cat = AsyncMock(side_effect=Exception('Invalid IPFS Data'))
+
+    # Act
+    result = await get_submission_data_bulk(
+        redis_conn=mock_redis,
+        cids=cids,
+        ipfs_reader=ipfs_reader,
+        project_ids=[project_id] * len(cids),
+        ensure_complete=True,
+    )
+
+    assert result == []
+    for cid in cids:
+        assert await mock_redis.get(cid_not_found_key(cid)) == b'true'
+
+    # clean slate
+    await mock_redis.flushall()
+    ipfs_reader.cat.reset_mock()
+
+
+@pytest.mark.asyncio(loop_scope='module')
+async def test_get_submission_data_bulk_ensure_complete_false(
+    mock_redis,
+    epoch_ids: List[int],
+    project_id: str,
+):
+    """
+    Test `get_submission_data_bulk` function with ensure_complete=False.
+    Ensures that partial failures result in empty dicts in the returned list.
+    """
+    # Arrange
+    cids = [f'valid_cid{epoch_id}' for epoch_id in epoch_ids]
+    invalid_cid = 'invalid_cid'
+    cids[-1] = invalid_cid
+    ipfs_reader = AsyncMock()
+    # First calls return valid data, final call raises an exception
+    side_effect = [
+        json.dumps({'key': 'value'}).encode('utf-8')
+        for _ in range(len(cids) - 1)
+    ]
+    side_effect.append(Exception('Invalid IPFS Data'))
+    ipfs_reader.cat = AsyncMock(side_effect=side_effect)
+
+    result = await get_submission_data_bulk(
+        redis_conn=mock_redis,
+        cids=cids,
+        ipfs_reader=ipfs_reader,
+        project_ids=[project_id] * len(cids),
+        ensure_complete=False,
+    )
+
+    expected_result = [{'key': 'value'} for _ in range(len(cids) - 1)]
+    expected_result.append({})
+    assert result == expected_result
+    # Only the invalid CID should be marked as not found
+    assert await mock_redis.get(cid_not_found_key(invalid_cid)) == b'true'
+
+    # clean slate
+    await mock_redis.flushall()
+    ipfs_reader.cat.reset_mock()
+
+
+@pytest.mark.asyncio(loop_scope='module')
+async def test_get_project_epoch_snapshot_bulk_ensure_complete_true(
+    mock_redis,
+    rpc_helper,
+    epoch_ids: List[int],
+    project_id: str,
+    proxy_contract,
+    ipfs_reader,
+):
+    """
+    Test `get_project_epoch_snapshot_bulk` function with ensure_complete=True.
+    Ensures that if any submission data fetch fails, the entire function returns an empty list.
+    """
+    # Arrange
+    epoch_id_min = min(epoch_ids)
+    epoch_id_max = max(epoch_ids)
+    expected_cids = [f'CID{project_id}{epoch_id}' for epoch_id in epoch_ids]
+
+    ipfs_reader.cat = AsyncMock(side_effect=Exception('Invalid IPFS Data'))
+
+    # Mock get_project_finalized_cids_bulk to return predefined CIDs
+    with patch('snapshotter.utils.data_utils.get_project_finalized_cids_bulk', AsyncMock(return_value=expected_cids)):
+        result = await get_project_epoch_snapshot_bulk(
+            redis_conn=mock_redis,
+            state_contract_obj=proxy_contract,
+            rpc_helper=rpc_helper,
+            ipfs_reader=ipfs_reader,
+            epoch_id_min=epoch_id_min,
+            epoch_id_max=epoch_id_max,
+            project_id=project_id,
+            ensure_complete=True,
+        )
+
+    assert result == []
+
+    # clean slate
+    await mock_redis.flushall()
+    ipfs_reader.cat.reset_mock()
+
+
+@pytest.mark.asyncio(loop_scope='module')
+async def test_get_project_epoch_snapshot_bulk_ensure_complete_false(
+    mock_redis,
+    rpc_helper,
+    epoch_ids: List[int],
+    project_id: str,
+    proxy_contract,
+):
+    """
+    Test `get_project_epoch_snapshot_bulk` function with ensure_complete=False.
+    Ensures that partial submission data fetch failures do not result in an empty list.
+    """
+    # Arrange
+    epoch_id_min = min(epoch_ids)
+    epoch_id_max = max(epoch_ids)
+    expected_cids = [f'CID{project_id}{epoch_id}' for epoch_id in epoch_ids]
+
+    side_effect = [
+        json.dumps({'key': 'value'}).encode('utf-8')
+        for _ in range(len(expected_cids) - 1)
+    ]
+    side_effect.append(Exception('Invalid IPFS Data'))
+    ipfs_reader.cat = AsyncMock(side_effect=side_effect)
+
+    expected_submission_data = [{'key': 'value'} for _ in range(len(epoch_ids) - 1)]
+    expected_submission_data.append({})
+
+    # Mock get_project_finalized_cids_bulk to return predefined CIDs
+    with patch('snapshotter.utils.data_utils.get_project_finalized_cids_bulk', AsyncMock(return_value=expected_cids)):
+        result = await get_project_epoch_snapshot_bulk(
+            redis_conn=mock_redis,
+            state_contract_obj=proxy_contract,
+            rpc_helper=rpc_helper,
+            ipfs_reader=ipfs_reader,
+            epoch_id_min=epoch_id_min,
+            epoch_id_max=epoch_id_max,
+            project_id=project_id,
+            ensure_complete=False,
+        )
+
+    assert result == expected_submission_data
+
+    # clean slate
+    await mock_redis.flushall()
+    ipfs_reader.cat.reset_mock()
