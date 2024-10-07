@@ -157,6 +157,10 @@ async def send_failure_notifications_async(
                 ),
             )
         else:
+            helper_logger.debug(
+                'Not sending failure notification for {} because the last notification was sent within the minimum reporting interval',
+                message.issueType,
+            )
             return
 
     notification_tasks = []
