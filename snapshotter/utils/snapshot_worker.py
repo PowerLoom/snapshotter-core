@@ -128,7 +128,9 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
 
             await send_failure_notifications_async(
-                client=self._client, message=notification_message,
+                client=self._client,
+                message=notification_message,
+                redis_conn=self._redis_conn,
             )
 
             # Update Redis with failure state
@@ -239,7 +241,9 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
 
             await send_failure_notifications_async(
-                client=self._client, message=notification_message,
+                client=self._client,
+                message=notification_message,
+                redis_conn=self._redis_conn,
             )
 
             # Update Redis with failure state

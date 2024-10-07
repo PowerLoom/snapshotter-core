@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import time
 from abc import ABC
 from abc import ABCMeta
 from abc import abstractmethod
@@ -24,6 +25,7 @@ from snapshotter.utils.models.message_models import PowerloomCalculateAggregateM
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotSubmittedMessage
+from snapshotter.utils.redis.redis_keys import callback_last_sent_by_issue
 from snapshotter.utils.rpc import RpcHelper
 
 # Setup logger for this module
@@ -124,39 +126,69 @@ def sync_notification_callback_result_handler(f: functools.partial):
         helper_logger.debug('Callback or notification result:{}', result)
 
 
-async def send_failure_notifications_async(client: AsyncClient, message: BaseModel):
+async def send_failure_notifications_async(
+    client: AsyncClient,
+    message: SnapshotterIssue,
+    redis_conn: aioredis.Redis,
+):
     """
     Sends failure notifications asynchronously to the configured reporting services.
 
     Args:
         client (AsyncClient): The async HTTP client to use for sending notifications.
-        message (BaseModel): The message to send as notification.
+        message (SnapshotterIssue): The message to send as notification.
+        redis_conn (aioredis.Redis): Redis connection for rate limiting.
 
     Returns:
         None
     """
-    # Send notification to the reporting service if configured
+    # Check if the last notification was sent within the minimum reporting interval
+    caching_task = []
+    if settings.reporting.min_reporting_interval > 0:
+        last_sent_timestamp = await redis_conn.get(
+            callback_last_sent_by_issue(message.issueType),
+        )
+        if not last_sent_timestamp:
+            caching_task.append(
+                redis_conn.set(
+                    name=callback_last_sent_by_issue(message.issueType),
+                    value=message.timeOfReporting,
+                    ex=settings.reporting.min_reporting_interval,
+                ),
+            )
+        else:
+            return
+
+    notification_tasks = []
     if settings.reporting.service_url:
-        f = asyncio.ensure_future(
+        f = asyncio.create_task(
             client.post(
                 url=urljoin(settings.reporting.service_url, '/reportIssue'),
                 json=message.dict(),
             ),
         )
         f.add_done_callback(misc_notification_callback_result_handler)
-
-    # Send notification to Slack if configured
+        notification_tasks.append(f)
     if settings.reporting.slack_url:
-        f = asyncio.ensure_future(
+        f = asyncio.create_task(
             client.post(
                 url=settings.reporting.slack_url,
                 json=message.dict(),
             ),
         )
         f.add_done_callback(misc_notification_callback_result_handler)
+        notification_tasks.append(f)
+
+    if notification_tasks:
+        notification_tasks = caching_task + notification_tasks
+        await asyncio.gather(*notification_tasks)
 
 
-def send_failure_notifications_sync(client: SyncClient, message: SnapshotterIssue):
+def send_failure_notifications_sync(
+    client: SyncClient,
+    message: SnapshotterIssue,
+    redis_conn: aioredis.Redis,
+):
     """
     Sends failure notifications synchronously to the reporting service, Slack, and Telegram.
 

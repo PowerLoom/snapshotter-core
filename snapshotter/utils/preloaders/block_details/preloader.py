@@ -52,6 +52,7 @@ class BlockDetailsPreloader(GenericPreloader):
         except Exception as e:
             # Log any errors that occur during the process
             self._logger.error(f'Error in block details preloader: {e}')
+            raise e
         finally:
             # Ensure Redis connection is closed after operation
             await redis_conn.close()

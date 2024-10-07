@@ -354,7 +354,9 @@ class GenericAsyncWorker(multiprocessing.Process):
                 extra=json.dumps({'issueDetails': f'Error : {e}'}),
             )
             await send_failure_notifications_async(
-                client=self._client, message=notification_message,
+                client=self._client,
+                message=notification_message,
+                redis_conn=self._redis_conn,
             )
         else:
             # Add to zset of unfinalized snapshot CIDs
