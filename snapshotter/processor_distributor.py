@@ -38,17 +38,16 @@ from snapshotter.settings.config import projects_config
 from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
-from snapshotter.utils.data_utils import get_snapshot_submision_window
 from snapshotter.utils.data_utils import get_source_chain_epoch_size
 from snapshotter.utils.data_utils import get_source_chain_id
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import SnapshotterStates
 from snapshotter.utils.models.data_models import SnapshotterStateUpdate
-from snapshotter.utils.models.data_models import SnapshottersUpdatedEvent
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomProjectsUpdatedMessage
+from snapshotter.utils.models.message_models import PowerloomSnapshotBatchSubmittedMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotFinalizedMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotSubmittedMessage
@@ -333,11 +332,6 @@ class ProcessorDistributor(multiprocessing.Process):
             rpc_helper=self._anchor_rpc_helper,
             state_contract_obj=self._protocol_state_contract,
         )
-        self._submission_window = await get_snapshot_submision_window(
-            redis_conn=self._redis_conn,
-            rpc_helper=self._anchor_rpc_helper,
-            state_contract_obj=self._protocol_state_contract,
-        )
 
     async def init_worker(self):
         """
@@ -392,7 +386,7 @@ class ProcessorDistributor(multiprocessing.Process):
             self._preload_completion_conditions[epoch.epochId][k]
             for k in preloader_types_l
         ]
-        self._logger.debug(
+        self._logger.info(
             'Waiting for preload conditions against epoch {}: {}',
             epoch.epochId,
             conditions,
@@ -535,12 +529,12 @@ class ProcessorDistributor(multiprocessing.Process):
                 EpochBase.parse_raw(message.body)
             )
         except ValidationError:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Bad message structure of epoch callback',
             )
             return
         except Exception:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Unexpected message format of epoch callback',
             )
             return
@@ -595,7 +589,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     message=msg_body,
                 )
 
-                self._logger.debug(
+                self._logger.info(
                     'Sent out message to be processed by worker'
                     f' {project_type} : {process_unit}',
                 )
@@ -621,7 +615,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     f':{settings.instance_id}:EpochReleased.{project_type}',
                     message=msg_body,
                 )
-                self._logger.debug(
+                self._logger.info(
                     'Sent out message to be processed by worker'
                     f' {project_type} : {process_unit}',
                 )
@@ -661,11 +655,6 @@ class ProcessorDistributor(multiprocessing.Process):
                     ),
                 )
 
-                if project_config.projects:
-                    self._logger.debug(
-                        f'Sent out {len(project_config.projects)} {project_type} messages to be processed by snapshot builder worker'
-                        f' for epoch {epoch.epochId}',
-                    )
             results = await asyncio.gather(*queuing_tasks, return_exceptions=True)
             for result in results:
                 if isinstance(result, Exception):
@@ -673,6 +662,10 @@ class ProcessorDistributor(multiprocessing.Process):
                         'Error while sending message to queue. Error - {}',
                         result,
                     )
+            self._logger.info(
+                f'Sent out {len(project_config.projects)} messages to be processed by snapshot builder worker'
+                f' for epoch {epoch.epochId}',
+            )
 
     async def _enable_pending_projects_for_epoch(self, epoch_id) -> Set[str]:
         """
@@ -770,7 +763,63 @@ class ProcessorDistributor(multiprocessing.Process):
 
         self._upcoming_project_changes[msg_obj.enableEpochId].append(msg_obj)
 
-    # NOTE: refactored from V1 to not send snapshot finalized message to payload commit queue since the service is deprecated
+    # NOTE: Considering SequencerFinalized state as Finalized for now
+    # data data is overwritten upon receiving SnapshotFinalized message for the project
+    # TODO: Create separate states for SequencerFinalized and SnapshotFinalized
+    async def _cache_submitted_snapshot(self, message: IncomingMessage):
+        """
+        Caches the snapshot data and forwards it to the payload commit queue.
+
+        Args:
+            message (IncomingMessage): The incoming message containing the snapshot data.
+
+        Returns:
+            None
+        """
+        event_type = message.routing_key.split('.')[-1]
+
+        if event_type == 'SnapshotBatchSubmitted':
+            self._logger.debug(f'SnapshotBatchSubmittedEvent caught with message {message}')
+            msg_obj: PowerloomSnapshotBatchSubmittedMessage = (
+                PowerloomSnapshotBatchSubmittedMessage.parse_raw(message.body)
+            )
+        else:
+            return
+
+        transaction_hash = msg_obj.transactionHash
+
+        tx = await self._anchor_rpc_helper.get_transaction_from_hash(transaction_hash)
+
+        decoded_input = self._protocol_state_contract.decode_function_input(tx.input)
+
+        _, input_params = decoded_input
+
+        # self._logger.info(f'Decoded input: {function_name}, {input_params}')
+        submitted_batch_data = zip(input_params['projectIds'], input_params['snapshotCids'])
+
+        for project_id, snapshot_cid in submitted_batch_data:
+            # update last_finalized_epoch in redis
+            await self._redis_conn.set(
+                name=project_last_finalized_epoch_key(project_id),
+                value=msg_obj.epochId,
+                ex=60,
+            )
+
+            # Add to project finalized data zset
+            await self._redis_conn.zadd(
+                project_finalized_data_zset(project_id=project_id),
+                {snapshot_cid: msg_obj.epochId},
+            )
+
+            await self._redis_conn.hset(
+                name=epoch_id_project_to_state_mapping(msg_obj.epochId, SnapshotterStates.SNAPSHOT_FINALIZE.value),
+                mapping={
+                    project_id: SnapshotterStateUpdate(
+                        status='success', timestamp=int(time.time()), extra={'snapshot_cid': snapshot_cid},
+                    ).json(),
+                },
+            )
+
     async def _cache_finalized_snapshot(self, message: IncomingMessage):
         """
         Caches the snapshot data and forwards it to the payload commit queue.
@@ -784,7 +833,7 @@ class ProcessorDistributor(multiprocessing.Process):
         event_type = message.routing_key.split('.')[-1]
 
         if event_type == 'SnapshotFinalized':
-            self._logger.info(f'SnapshotFinalizedEvent caught with message {message}')
+            self._logger.debug(f'SnapshotFinalizedEvent caught with message {message}')
             msg_obj: PowerloomSnapshotFinalizedMessage = (
                 PowerloomSnapshotFinalizedMessage.parse_raw(message.body)
             )
@@ -795,7 +844,7 @@ class ProcessorDistributor(multiprocessing.Process):
         await self._redis_conn.set(
             name=project_last_finalized_epoch_key(msg_obj.projectId),
             value=msg_obj.epochId,
-            ex=60.0,
+            ex=60,
         )
 
         # Add to project finalized data zset
@@ -832,12 +881,12 @@ class ProcessorDistributor(multiprocessing.Process):
             )
 
         except ValidationError:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Bad message structure of event callback',
             )
             return
         except Exception:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Unexpected message format of event callback',
             )
             return
@@ -890,7 +939,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     )
 
                     if not events:
-                        self._logger.info(f'No events found for {process_unit.epochId}')
+                        self._logger.debug(f'No events found for {process_unit.epochId}')
                         continue
 
                     event_project_ids = set()
@@ -961,7 +1010,7 @@ class ProcessorDistributor(multiprocessing.Process):
         await message.ack()
 
         message_type = message.routing_key.split('.')[-1]
-        self._logger.debug(
+        self._logger.info(
             (
                 'Got message to process and distribute: {}'
             ),
@@ -999,20 +1048,16 @@ class ProcessorDistributor(multiprocessing.Process):
             )
 
         elif message_type == 'SnapshotFinalized':
-            self._logger.info(f'SnapshotFinalizedEvent caught with message {message}')
+            self._logger.debug(f'SnapshotFinalizedEvent caught with message {message}')
             await self._cache_finalized_snapshot(
                 message,
             )
-        elif message_type == 'ProjectsUpdated':
-            await self._update_all_projects(message)
-        elif message_type == 'allSnapshottersUpdated':
-            msg_cast = SnapshottersUpdatedEvent.parse_raw(message.body)
-            if msg_cast.snapshotterAddress == to_checksum_address(settings.instance_id):
-                if self._redis_conn:
-                    await self._redis_conn.set(
-                        active_status_key,
-                        int(msg_cast.allowed),
-                    )
+
+        elif message_type == 'SnapshotBatchSubmitted':
+            await self._cache_submitted_snapshot(
+                message,
+            )
+
         else:
             self._logger.error(
                 (

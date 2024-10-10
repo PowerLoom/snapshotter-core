@@ -50,7 +50,7 @@ async def test_web3_async_call():
 
     # Execute the Web3 call asynchronously
     result = await rpc_helper.web3_call(tasks)
-    logger.debug('Retrieve: {}', result)
+    test_logger.debug('Retrieve: {}', result)
 
 
 if __name__ == '__main__':
@@ -59,4 +59,4 @@ if __name__ == '__main__':
         asyncio.get_event_loop().run_until_complete(test_web3_async_call())
     except Exception as e:
         # Log any exceptions that occur during execution
-        test_logger.opt(exception=True).error('exception: {}', e)
+        test_logger.opt(exception=settings.logs.debug_mode).error('exception: {}', e)

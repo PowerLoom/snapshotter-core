@@ -49,7 +49,7 @@ def get_logger():
                 retention='2 days',
             )
 
-    if settings.logs.trace_enabled:
+    if settings.logs.debug_mode:
         logger.add(sys.stdout, level='TRACE', format=FORMAT, filter=create_level_filter('TRACE'))
         logger.add(sys.stdout, level='DEBUG', format=FORMAT, filter=create_level_filter('DEBUG'))
 

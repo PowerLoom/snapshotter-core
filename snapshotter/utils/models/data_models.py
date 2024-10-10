@@ -41,6 +41,7 @@ class SnapshotterReportState(Enum):
     CRASHED_REPORTER_THREAD = 'CRASHED_REPORTER_THREAD'
     UNHEALTHY_EPOCH_PROCESSING = 'UNHEALTHY_EPOCH_PROCESSING'
     ONLY_FINALIZED_SNAPSHOT_RECIEVED = 'ONLY_FINALIZED_SNAPSHOT_RECIEVED'
+    DELEGATE_TASK_FAILURE = 'DELEGATE_TASK_FAILURE'
 
 
 class SnapshotterStates(Enum):
@@ -363,13 +364,14 @@ class TxnPayload(BaseModel):
     contractAddress: str
 
 
-class SnapshotBatchFinalizedEvent(EventBase):
+class SnapshotBatchSubmittedEvent(EventBase):
     """
     Event model for when a snapshot batch is finalized.
     """
     epochId: int
     batchId: int
     timestamp: int
+    transactionHash: str
 
 
 class TelegramEpochProcessingReportMessage(BaseModel):

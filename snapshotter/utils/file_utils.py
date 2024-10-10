@@ -42,8 +42,8 @@ def read_json_file(
             return json_data
     except Exception as exc:
         logger.warning(f'Unable to open or read the {file_path} file')
-        if settings.logs.trace_enabled:
-            logger.opt(exception=True).error(exc)
+        if settings.logs.debug_mode:
+            logger.opt(exception=settings.logs.debug_mode).error(exc)
         raise exc
 
 
@@ -110,7 +110,7 @@ def write_bytes_to_file(directory: str, file_name: str, data: bytes) -> None:
             bytes_written = file_obj.write(data)
             logger.debug('Wrote {} bytes to file {}', bytes_written, file_path)
     except Exception as exc:
-        logger.opt(exception=True).error('Unable to open or write to the {} file', file_path)
+        logger.opt(exception=settings.logs.debug_mode).error('Unable to open or write to the {} file', file_path)
         raise exc
 
 
@@ -131,5 +131,7 @@ def read_text_file(file_path: str) -> str | None:
         logger.warning('File not found: {}', file_path)
         return None
     except Exception as exc:
-        logger.opt(exception=True).warning('Unable to open the {} file because of exception: {}', file_path, exc)
+        logger.opt(exception=settings.logs.debug_mode).warning(
+            'Unable to open the {} file because of exception: {}', file_path, exc,
+        )
         return None

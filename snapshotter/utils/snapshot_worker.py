@@ -112,7 +112,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
         except Exception as e:
             # Handle exceptions during snapshot processing
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
             )
@@ -128,7 +128,9 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
 
             await send_failure_notifications_async(
-                client=self._client, message=notification_message,
+                client=self._client,
+                message=notification_message,
+                redis_conn=self._redis_conn,
             )
 
             # Update Redis with failure state
@@ -152,8 +154,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     epoch_id=msg_obj.epochId, project_id=project_id,
                 ),
                 value=snapshot.json(),
-                # Set expiration time (10 times the submission window * 2 seconds)
-                ex=self._submission_window * 10 * 2,
+                # Store snapshot for 10 mins
+                ex=600,
             )
 
             # Update Redis with success state
@@ -223,7 +225,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
         except Exception as e:
             # Handle exceptions during bulk snapshot processing
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
             )
@@ -239,7 +241,9 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
 
             await send_failure_notifications_async(
-                client=self._client, message=notification_message,
+                client=self._client,
+                message=notification_message,
+                redis_conn=self._redis_conn,
             )
 
             # Update Redis with failure state
@@ -289,8 +293,8 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                         epoch_id=msg_obj.epochId, project_id=project_id,
                     ),
                     value=snapshot.json(),
-                    # Set expiration time (10 times the submission window * 2 seconds)
-                    ex=self._submission_window * 10 * 2,
+                    # Store snapshot for 10 mins
+                    ex=600,
                 )
 
                 # Update Redis with success state
@@ -344,7 +348,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
                 self._redis_conn,
             )
-        self._logger.debug(
+        self._logger.info(
             'Got epoch to process for {}: {}',
             task_type, msg_obj,
         )
@@ -382,7 +386,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 PowerloomSnapshotProcessMessage.parse_raw(message.body)
             )
         except ValidationError as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Bad message structure of callback processor. Error: {}, {}'
                 ),
@@ -390,7 +394,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
             return
         except Exception as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Unexpected message structure of callback in processor. Error: {}'
                 ),

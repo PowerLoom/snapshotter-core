@@ -45,7 +45,6 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import get_rabbitmq_channel
 from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
-from snapshotter.utils.data_utils import get_snapshot_submision_window
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import SnapshotterIssue
@@ -238,7 +237,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         )
         r.raise_for_status()
         resp = r.json()
-        self._logger.info('Uploaded snapshot to web3 storage: {} | Response: {}', snapshot, resp)
+        self._logger.debug('Uploaded snapshot to web3 storage: {} | Response: {}', snapshot, resp)
 
     @retry(
         wait=wait_random_exponential(multiplier=1, max=10),
@@ -342,7 +341,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         try:
             snapshot_cid = await self._upload_to_ipfs(snapshot_bytes, _ipfs_writer_client)
         except Exception as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception uploading snapshot to IPFS for epoch {}: {}, Error: {},'
                 'sending failure notifications', epoch, snapshot, e,
             )
@@ -355,7 +354,9 @@ class GenericAsyncWorker(multiprocessing.Process):
                 extra=json.dumps({'issueDetails': f'Error : {e}'}),
             )
             await send_failure_notifications_async(
-                client=self._client, message=notification_message,
+                client=self._client,
+                message=notification_message,
+                redis_conn=self._redis_conn,
             )
         else:
             # Add to zset of unfinalized snapshot CIDs
@@ -398,7 +399,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                         )
 
             except Exception as e:
-                self._logger.opt(exception=True).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     'Exception sending snapshot submitted message to event detector queue: {} | Project: {} | Epoch: {} | Snapshot CID: {}',
                     e, project_id, epoch.epochId, snapshot_cid,
                 )
@@ -572,7 +573,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         if self._stream:
             try:
                 await self._stream.end()
-                self._logger.info('Closed stream')
+                self._logger.debug('Closed stream')
             except Exception as e:
                 self._logger.error(f'Error closing stream: {e}')
             finally:
@@ -639,7 +640,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         )
 
         msg = SnapshotSubmission(request=request_msg, signature=signature.hex(), header=current_block_hash)
-        self._logger.debug(
+        self._logger.info(
             'Snapshot submission created: {}', msg,
         )
 
@@ -656,7 +657,7 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         except Exception as e:
             self._logger.opt(
-                exception=True,
+                exception=settings.logs.debug_mode,
             ).error(f'Failed to send message: {e}')
             raise Exception(f'Failed to send message: {e}')
 
@@ -702,7 +703,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                     self._logger.debug(f'Sent message: {msg}')
                     return {'status_code': 200}
             except Exception as e:
-                self._logger.opt(exception=settings.logs.trace_enabled).error(f'Failed to send message: {e}')
+                self._logger.opt(exception=settings.logs.debug_mode).error(f'Failed to send message: {e}')
                 raise Exception(f'Failed to send message: {e}')
 
     async def _init_grpc(self):
@@ -753,20 +754,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         else:
             self._epoch_size = epoch_size[0]
             self._logger.debug('Set epoch size to {}', self._epoch_size)
-        try:
-            submission_window = await get_snapshot_submision_window(
-                redis_conn=self._redis_conn,
-                rpc_helper=self._anchor_rpc_helper,
-                state_contract_obj=self._protocol_state_contract,
-            )
-        except Exception as e:
-            self._logger.exception(
-                'Exception in querying protocol state for snapshot submission window: {}',
-                e,
-            )
-        else:
-            self._submission_window = submission_window
-            self._logger.debug('Set snapshot submission window to {}', self._submission_window)
 
     async def init(self):
         """

@@ -15,6 +15,7 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.generic_worker import GenericAsyncWorker
 from snapshotter.utils.models.data_models import DelegateTaskProcessorIssue
+from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
 from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 
@@ -100,14 +101,14 @@ class DelegateAsyncWorker(GenericAsyncWorker):
                 response_msg=result,
             )
         except Exception as e:
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception while processing tx receipt fetch for {}: {}', msg_obj, e,
             )
 
             # Prepare and send failure notification
             notification_message = DelegateTaskProcessorIssue(
                 instanceID=settings.instance_id,
-                issueType='DELEGATE_TASK_FAILURE',
+                issueType=SnapshotterReportState.DELEGATE_TASK_FAILURE.value,
                 epochId=msg_obj.epochId,
                 timeOfReporting=time.time(),
                 exception=json.dumps({'issueDetails': f'Error : {e}'}),
@@ -116,6 +117,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             await send_failure_notifications_async(
                 client=self._client,
                 message=notification_message,
+                redis_conn=self._redis_conn,
             )
         finally:
             await self._redis_conn.close()
@@ -162,7 +164,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
                 )
 
         except Exception as e:
-            self._logger.opt(exception=settings.logs.trace_enabled).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Exception sending message to delegate :'
                     ' {} | dump: {}'
@@ -197,7 +199,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             await message.ack()
 
         except ValidationError as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Bad message structure of callback processor. Error: {}, {}'
                 ),
@@ -205,7 +207,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             )
             return
         except Exception as e:
-            self._logger.opt(exception=True).error(
+            self._logger.opt(exception=settings.logs.debug_mode).error(
                 (
                     'Unexpected message structure of callback in processor. Error: {}'
                 ),

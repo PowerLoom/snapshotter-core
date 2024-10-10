@@ -11,6 +11,7 @@ epoch_detector_last_processed_epoch = 'SystemEpochDetector:lastProcessedEpoch'
 # Redis key for the last processed block by the event detector
 event_detector_last_processed_block = 'SystemEventDetector:lastProcessedBlock'
 
+
 # Redis keys for various RPC call counters
 rpc_json_rpc_calls = (
     'rpc:jsonRpc:' + settings.namespace + ':calls'
@@ -39,9 +40,6 @@ rpc_get_transaction_receipt_calls = (
 # Redis key for cached epoch process report
 epoch_process_report_cached_key = 'epochProcessReport'
 
-# Redis key for snapshot submission window
-snapshot_submission_window_key = 'snapshotSubmissionWindow'
-
 # Redis key for snapshotter active status
 active_status_key = f'snapshotterActiveStatus:{settings.namespace}'
 
@@ -57,6 +55,19 @@ def project_finalized_data_zset(project_id):
         str: Redis key for the project's finalized data zset.
     """
     return f'projectID:{project_id}:finalizedData'
+
+
+def cid_not_found_key(cid):
+    """
+    Generate Redis key for CID not found.
+
+    Args:
+        cid (str): The CID of the file.
+
+    Returns:
+        str: Redis key for the CID not found.
+    """
+    return f'CIDNotFound:{cid}'
 
 
 def project_first_epoch_hmap():
@@ -270,3 +281,13 @@ def process_hub_core_start_timestamp():
         str: Redis key for the process hub core start timestamp.
     """
     return f'processHubCoreStartTimestamp:{settings.namespace}'
+
+
+def callback_last_sent_by_issue(issue_type):
+    """
+    Generate Redis key for callback last sent timestamp. Stores the last sent timestamp for each issueType.
+
+    Returns:
+        str: Redis key for the callback last sent timestamp.
+    """
+    return f'callbackLastSentTimestamp:{settings.namespace}:{issue_type}'

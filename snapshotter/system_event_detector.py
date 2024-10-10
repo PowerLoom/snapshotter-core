@@ -21,7 +21,8 @@ from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.exceptions import GenericExitOnSignal
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import EpochReleasedEvent
-from snapshotter.utils.models.data_models import SnapshotBatchFinalizedEvent
+from snapshotter.utils.models.data_models import SnapshotBatchSubmittedEvent
+from snapshotter.utils.models.data_models import SnapshotFinalizedEvent
 from snapshotter.utils.rabbitmq_helpers import RabbitmqThreadedSelectLoopInteractor
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import event_detector_last_processed_block
@@ -64,11 +65,11 @@ def rabbitmq_and_redis_cleanup(fn):
                         ),
                     )
             except Exception as E:
-                self._logger.opt(exception=True).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     'Error while saving progress: {}', E,
                 )
         except Exception as E:
-            self._logger.opt(exception=True).error('Error while running: {}', E)
+            self._logger.opt(exception=settings.logs.debug_mode).error('Error while running: {}', E)
         finally:
             self._logger.debug('Shutting down!')
             sys.exit(0)
@@ -104,9 +105,6 @@ class EventDetectorProcess(multiprocessing.Process):
         self._rabbitmq_thread: threading.Thread
         self._rabbitmq_queue = queue.Queue()
         self._shutdown_initiated = False
-        self._logger = default_logger.bind(
-            module=f'{name}|{settings.namespace}-{settings.instance_id[:5]}',
-        )
 
         self._exchange = (
             f'{settings.rabbitmq.setup.event_detector.exchange}:{settings.namespace}'
@@ -118,10 +116,8 @@ class EventDetectorProcess(multiprocessing.Process):
         self._last_processed_block = None
         self._source_rpc_helper = RpcHelper(rpc_settings=settings.rpc)
         self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
-        self.contract_abi = read_json_file(
-            settings.protocol_state.abi,
-            self._logger,
-        )
+        self.contract_abi = None
+        self._logger = None
         self.contract_address = settings.protocol_state.address
 
         self._last_reporting_service_ping = 0
@@ -134,14 +130,14 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         while True:
             self._logger.info('Waiting for simulation completion...')
-            await asyncio.sleep(15)
+            await asyncio.sleep(30)
 
     async def init(self):
         """
         Initializes the EventDetectorProcess by waiting for local collector initialization,
         broadcasting simulation submission, and waiting for simulation completion.
         """
-        self._logger.info(
+        self._logger.debug(
             'Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 15 seconds...',
         )
         await asyncio.sleep(15)
@@ -154,7 +150,7 @@ class EventDetectorProcess(multiprocessing.Process):
         except Exception as e:
             self._logger.error('Error while waiting for simulation completion: {}', e)
         finally:
-            self._logger.info('Breaking out of simulation completion wait loop...')
+            self._logger.debug('Breaking out of simulation completion wait loop...')
         # TODO: move simulation completion check to a separate cache entry or check on a contract entry
         # poll for simulation completion
         self._simulation_completed = True
@@ -163,7 +159,7 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         Prepares and broadcasts the simulation submission event.
         """
-        self._logger.info('⏳Preparing simulation submission...')
+        self._logger.debug('⏳Preparing simulation submission...')
         current_block_number = await self._source_rpc_helper.get_current_block_number()
 
         event = EpochReleasedEvent(
@@ -211,6 +207,10 @@ class EventDetectorProcess(multiprocessing.Process):
         new_epoch_detected = False
         latest_epoch_id = - 1
         for log in events_log:
+            if log.args.dataMarketAddress != settings.data_market:
+                self._logger.debug('Skipping event: {}', log)
+                continue
+
             if log.event == 'EpochReleased':
                 event = EpochReleasedEvent(
                     begin=log.args.begin,
@@ -222,10 +222,21 @@ class EventDetectorProcess(multiprocessing.Process):
                 latest_epoch_id = max(latest_epoch_id, log.args.epochId)
                 events.append((log.event, event))
 
-            elif log.event == 'SnapshotBatchFinalized':
-                event = SnapshotBatchFinalizedEvent(
+            elif log.event == 'SnapshotBatchSubmitted':
+                event = SnapshotBatchSubmittedEvent(
                     epochId=log.args.epochId,
                     batchId=log.args.batchId,
+                    timestamp=log.args.timestamp,
+                    transactionHash=log.transactionHash.hex(),
+                )
+                events.append((log.event, event))
+
+            elif log.event == 'SnapshotFinalized':
+                event = SnapshotFinalizedEvent(
+                    epochId=log.args.epochId,
+                    epochEnd=log.args.epochEnd,
+                    projectId=log.args.projectId,
+                    snapshotCid=log.args.snapshotCid,
                     timestamp=log.args.timestamp,
                 )
                 events.append((log.event, event))
@@ -239,8 +250,10 @@ class EventDetectorProcess(multiprocessing.Process):
                 last_epoch_detected_epoch_id_key(),
                 latest_epoch_id,
             )
-
-        self._logger.info('Events detected in block range on Prost network {}-{}: {}', from_block, to_block, events)
+        if events:
+            self._logger.info('Events detected in block range on Prost network {}-{}: {}', from_block, to_block, events)
+        else:
+            self._logger.debug('No events detected in block range on Prost network {}-{}', from_block, to_block)
         return events
 
     def _interactor_wrapper(self, q: queue.Queue):
@@ -275,7 +288,7 @@ class EventDetectorProcess(multiprocessing.Process):
             self._rabbitmq_interactor.stop()
             raise GenericExitOnSignal
 
-    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotBatchFinalizedEvent]):
+    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotFinalizedEvent, SnapshotBatchSubmittedEvent]):
         """
         Broadcasts the given event to the RabbitMQ queue.
 
@@ -288,7 +301,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 'Skipping event broadcast to RabbitMQ for epoch {} as simulation is not complete. Incoming event: {}', event.epochId, event,
             )
             return
-        self._logger.info('Broadcasting event: {}', event)
+        self._logger.debug('Broadcasting event: {}', event)
         brodcast_msg = (
             event.json().encode('utf-8'),
             self._exchange,
@@ -305,10 +318,10 @@ class EventDetectorProcess(multiprocessing.Process):
         while True:
             try:
                 current_block = await self._anchor_rpc_helper.get_current_block()
-                self._logger.info('Current block: {}', current_block)
+                self._logger.debug('Current block: {}', current_block)
 
             except Exception as e:
-                self._logger.opt(exception=True).error(
+                self._logger.opt(exception=settings.logs.debug_mode).error(
                     (
                         'Unable to fetch current block, ERROR: {}, '
                         'sleeping for {} seconds.'
@@ -332,7 +345,7 @@ class EventDetectorProcess(multiprocessing.Process):
                     )
 
             if self._last_processed_block == current_block:
-                self._logger.info(
+                self._logger.debug(
                     'No new blocks detected, sleeping for {} seconds...',
                     settings.rpc.polling_interval,
                 )
@@ -351,7 +364,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 try:
                     events = await self.get_events(self._last_processed_block + 1, current_block)
                 except Exception as e:
-                    self._logger.opt(exception=True).error(
+                    self._logger.opt(exception=settings.logs.debug_mode).error(
                         (
                             'Unable to fetch events from block {} to block {}, '
                             'ERROR: {}, sleeping for {} seconds.'
@@ -372,7 +385,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 try:
                     events = await self.get_events(current_block, current_block)
                 except Exception as e:
-                    self._logger.opt(exception=True).error(
+                    self._logger.opt(exception=settings.logs.debug_mode).error(
                         (
                             'Unable to fetch events from block {} to block {}, '
                             'ERROR: {}, sleeping for {} seconds.'
@@ -386,7 +399,7 @@ class EventDetectorProcess(multiprocessing.Process):
                     continue
 
             for event_type, event in events:
-                self._logger.info(
+                self._logger.debug(
                     'Processing event: {}', event,
                 )
                 self._broadcast_event(event_type, event)
@@ -394,11 +407,11 @@ class EventDetectorProcess(multiprocessing.Process):
             self._last_processed_block = current_block
 
             await self._redis_conn.set(event_detector_last_processed_block, json.dumps(current_block))
-            self._logger.info(
+            self._logger.debug(
                 'DONE: Processed blocks till, saving in redis: {}',
                 current_block,
             )
-            self._logger.info(
+            self._logger.debug(
                 'Sleeping for {} seconds...',
                 settings.rpc.polling_interval,
             )
@@ -423,6 +436,13 @@ class EventDetectorProcess(multiprocessing.Process):
         # Initialize the event loop
         self.ev_loop = asyncio.get_event_loop()
 
+        self._logger = default_logger.bind(
+            module='SystemEventDetector',
+        )
+        self.contract_abi = read_json_file(
+            settings.protocol_state.abi,
+            self._logger,
+        )
         # Initialize the Redis pool
         self.ev_loop.run_until_complete(self._init_redis_pool())
 
@@ -460,16 +480,19 @@ class EventDetectorProcess(multiprocessing.Process):
             address=Web3.to_checksum_address(self.contract_address),
             abi=self.contract_abi,
         )
+
         EVENTS_ABI = {
             'EpochReleased': self.contract.events.EpochReleased._get_event_abi(),
             'DayStartedEvent': self.contract.events.DayStartedEvent._get_event_abi(),
-            'SnapshotBatchFinalized': self.contract.events.SnapshotBatchFinalized._get_event_abi(),
+            'SnapshotFinalized': self.contract.events.SnapshotFinalized._get_event_abi(),
+            'SnapshotBatchSubmitted': self.contract.events.SnapshotBatchSubmitted._get_event_abi(),
         }
         self.event_sig, self.event_abi = get_event_sig_and_abi(
             {
                 'EpochReleased': 'EpochReleased(address,uint256,uint256,uint256,uint256)',
                 'DayStartedEvent': 'DayStartedEvent(address,uint256,uint256)',
-                'SnapshotBatchFinalized': 'SnapshotBatchFinalized(address,uint256,uint256,string,string,uint256)',
+                'SnapshotFinalized': 'SnapshotFinalized(address,uint256,uint256,string,string,uint256)',
+                'SnapshotBatchSubmitted': 'SnapshotBatchSubmitted(address,uint256,string,uint256,uint256)',
             },
             EVENTS_ABI,
         )

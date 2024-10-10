@@ -54,6 +54,7 @@ class RPCConfigFull(RPCConfigBase):
     """Full RPC configuration model."""
     skip_epoch_threshold_blocks: int
     polling_interval: int
+    semaphore_value: int = 20
 
 
 class RLimit(BaseModel):
@@ -102,7 +103,7 @@ class ReportingConfig(BaseModel):
     service_url: str
     telegram_url: str
     telegram_chat_id: str
-    failure_report_frequency: int
+    min_reporting_interval: int
 
 
 class Redis(BaseModel):
@@ -127,7 +128,7 @@ class RedisReader(BaseModel):
 
 class Logs(BaseModel):
     """Logging configuration model."""
-    trace_enabled: bool
+    debug_mode: bool
     write_to_files: bool
 
 

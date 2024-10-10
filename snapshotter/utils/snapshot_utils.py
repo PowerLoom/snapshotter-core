@@ -87,7 +87,7 @@ async def get_block_details_in_block_range(
         return block_details_dict
 
     except Exception as e:
-        snapshot_util_logger.opt(exception=settings.logs.trace_enabled, lazy=True).trace(
+        snapshot_util_logger.opt(exception=settings.logs.debug_mode, lazy=True).trace(
             'Unable to fetch block details, error_msg:{err}',
             err=lambda: str(e),
         )

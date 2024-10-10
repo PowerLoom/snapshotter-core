@@ -25,6 +25,7 @@ projects_config = ProjectsConfig(**projects_config_dict).config
 project_types = set()
 for project in projects_config:
     project_types.add(project.project_type)
+    project.projects = [project.lower() for project in project.projects]
 assert len(project_types) == len(projects_config), 'Duplicate project types found'
 
 # Load aggregator configuration

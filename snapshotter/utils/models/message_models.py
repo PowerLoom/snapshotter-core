@@ -56,9 +56,18 @@ class PowerloomSnapshotProcessMessage(EpochBase):
 class PowerloomSnapshotFinalizedMessage(BaseModel):
     """Model for Powerloom snapshot finalized messages."""
     epochId: int
+    epochEnd: int
     projectId: str
     snapshotCid: str
     timestamp: int
+
+
+class PowerloomSnapshotBatchSubmittedMessage(BaseModel):
+    """Model for Powerloom snapshot batch submitted messages."""
+    epochId: int
+    batchId: int
+    timestamp: int
+    transactionHash: str
 
 
 class PowerloomProjectsUpdatedMessage(BaseModel):
