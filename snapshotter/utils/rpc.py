@@ -299,6 +299,43 @@ class RpcHelper(object):
             raise Exception('No full nodes available')
         return self._nodes[self._current_node_index]
 
+    @acquire_rpc_semaphore
+    async def get_transaction_from_hash(self, tx_hash: str):
+        """
+        Retrieves the transaction details from the blockchain.
+
+        Args:
+            tx_hash (str): The hash of the transaction to retrieve.
+
+        Returns:
+            dict: The transaction details.
+        """
+        @retry(
+            reraise=True,
+            retry=retry_if_exception_type(RPCException),
+            wait=wait_random_exponential(multiplier=1, max=10),
+            stop=stop_after_attempt(settings.rpc.retry),
+            before_sleep=self._on_node_exception,
+        )
+        async def f(node_idx):
+            node = self._nodes[node_idx]
+            web3_provider = node['web3_client_async']
+
+            try:
+                transaction = await web3_provider.eth.get_transaction(tx_hash)
+                return transaction
+            except Exception as e:
+                exc = RPCException(
+                    request={'txHash': tx_hash},
+                    response=None,
+                    underlying_exception=e,
+                    extra_info=f'RPC_GET_TRANSACTION_ERROR: {str(e)}',
+                )
+                self._logger.trace('Error in get_transaction_from_hash, error {}', str(exc))
+                raise exc
+
+        return await f(node_idx=0)
+
     def _on_node_exception(self, retry_state: tenacity.RetryCallState):
         """
         Callback function to handle exceptions raised during RPC calls to nodes.

@@ -21,7 +21,8 @@ from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.exceptions import GenericExitOnSignal
 from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import EpochReleasedEvent
-from snapshotter.utils.models.data_models import SnapshotBatchFinalizedEvent
+from snapshotter.utils.models.data_models import SnapshotBatchSubmittedEvent
+from snapshotter.utils.models.data_models import SnapshotFinalizedEvent
 from snapshotter.utils.rabbitmq_helpers import RabbitmqThreadedSelectLoopInteractor
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import event_detector_last_processed_block
@@ -206,6 +207,10 @@ class EventDetectorProcess(multiprocessing.Process):
         new_epoch_detected = False
         latest_epoch_id = - 1
         for log in events_log:
+            if log.args.dataMarketAddress != settings.data_market:
+                self._logger.debug('Skipping event: {}', log)
+                continue
+
             if log.event == 'EpochReleased':
                 event = EpochReleasedEvent(
                     begin=log.args.begin,
@@ -217,10 +222,21 @@ class EventDetectorProcess(multiprocessing.Process):
                 latest_epoch_id = max(latest_epoch_id, log.args.epochId)
                 events.append((log.event, event))
 
-            elif log.event == 'SnapshotBatchFinalized':
-                event = SnapshotBatchFinalizedEvent(
+            elif log.event == 'SnapshotBatchSubmitted':
+                event = SnapshotBatchSubmittedEvent(
                     epochId=log.args.epochId,
                     batchId=log.args.batchId,
+                    timestamp=log.args.timestamp,
+                    transactionHash=log.transactionHash.hex(),
+                )
+                events.append((log.event, event))
+
+            elif log.event == 'SnapshotFinalized':
+                event = SnapshotFinalizedEvent(
+                    epochId=log.args.epochId,
+                    epochEnd=log.args.epochEnd,
+                    projectId=log.args.projectId,
+                    snapshotCid=log.args.snapshotCid,
                     timestamp=log.args.timestamp,
                 )
                 events.append((log.event, event))
@@ -272,7 +288,7 @@ class EventDetectorProcess(multiprocessing.Process):
             self._rabbitmq_interactor.stop()
             raise GenericExitOnSignal
 
-    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotBatchFinalizedEvent]):
+    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotBatchSubmittedEvent]):
         """
         Broadcasts the given event to the RabbitMQ queue.
 
@@ -464,16 +480,19 @@ class EventDetectorProcess(multiprocessing.Process):
             address=Web3.to_checksum_address(self.contract_address),
             abi=self.contract_abi,
         )
+
         EVENTS_ABI = {
             'EpochReleased': self.contract.events.EpochReleased._get_event_abi(),
             'DayStartedEvent': self.contract.events.DayStartedEvent._get_event_abi(),
-            'SnapshotBatchFinalized': self.contract.events.SnapshotBatchFinalized._get_event_abi(),
+            'SnapshotFinalized': self.contract.events.SnapshotFinalized._get_event_abi(),
+            'SnapshotBatchSubmitted': self.contract.events.SnapshotBatchSubmitted._get_event_abi(),
         }
         self.event_sig, self.event_abi = get_event_sig_and_abi(
             {
                 'EpochReleased': 'EpochReleased(address,uint256,uint256,uint256,uint256)',
                 'DayStartedEvent': 'DayStartedEvent(address,uint256,uint256)',
-                'SnapshotBatchFinalized': 'SnapshotBatchFinalized(address,uint256,uint256,string,string,uint256)',
+                'SnapshotFinalized': 'SnapshotFinalized(address,uint256,uint256,string,string,uint256)',
+                'SnapshotBatchSubmitted': 'SnapshotBatchSubmitted(address,uint256,string,uint256,uint256)',
             },
             EVENTS_ABI,
         )

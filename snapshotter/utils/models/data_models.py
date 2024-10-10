@@ -364,13 +364,14 @@ class TxnPayload(BaseModel):
     contractAddress: str
 
 
-class SnapshotBatchFinalizedEvent(EventBase):
+class SnapshotBatchSubmittedEvent(EventBase):
     """
     Event model for when a snapshot batch is finalized.
     """
     epochId: int
     batchId: int
     timestamp: int
+    transactionHash: str
 
 
 class TelegramEpochProcessingReportMessage(BaseModel):
