@@ -288,7 +288,7 @@ class EventDetectorProcess(multiprocessing.Process):
             self._rabbitmq_interactor.stop()
             raise GenericExitOnSignal
 
-    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotBatchSubmittedEvent]):
+    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotFinalizedEvent, SnapshotBatchSubmittedEvent]):
         """
         Broadcasts the given event to the RabbitMQ queue.
 
