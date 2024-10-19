@@ -190,7 +190,7 @@ async def get_epoch_info(
     return epoch_info
 
 
-@app.get('/last_finalized_epoch/{project_id}')
+@app.get('/last_finalized_epoch/{project_id}/{use_pending}')
 async def get_project_last_finalized_epoch_info(
     request: Request,
     response: Response,
