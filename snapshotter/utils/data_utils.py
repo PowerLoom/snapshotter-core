@@ -83,6 +83,29 @@ async def get_project_finalized_cid(redis_conn: aioredis.Redis, state_contract_o
         return None
 
 
+async def get_project_last_finalized_epoch(redis_conn: aioredis.Redis, state_contract_obj, rpc_helper, project_id, use_pending=True):
+    """
+    Get the last finalized epoch for a given project.
+    """
+    if use_pending:
+        [project_last_finalized_epoch] = await rpc_helper.web3_call(
+            tasks=[
+                ('lastSequencerFinalizedSnapshot', [Web3.to_checksum_address(settings.data_market), project_id]),
+            ],
+            contract_addr=state_contract_obj.address,
+            abi=state_contract_obj.abi,
+        )
+    else:
+        [project_last_finalized_epoch] = await rpc_helper.web3_call(
+            tasks=[
+                ('lastFinalizedSnapshot', [Web3.to_checksum_address(settings.data_market), project_id]),
+            ],
+            contract_addr=state_contract_obj.address,
+            abi=state_contract_obj.abi,
+        )
+    return project_last_finalized_epoch
+
+
 async def get_project_finalized_cids_bulk(
     redis_conn: aioredis.Redis,
     state_contract_obj,
