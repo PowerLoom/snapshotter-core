@@ -215,11 +215,11 @@ async def w3_get_and_cache_finalized_cid(
     logger.trace(f'consensus status for project {project_id} and epoch {epoch_id} is {consensus_status}')
 
     # Extract status and CID from the ConsensusStatus struct
-    status, cid, _ = consensus_status
+    status, cid, timestamp = consensus_status
 
     # Process and cache the result
     null_cid = f'null_{epoch_id}'
-    if status is not None and cid:
+    if timestamp and cid:
         if use_pending or status > 0:
             await redis_conn.zadd(
                 project_finalized_data_zset(project_id),
@@ -294,10 +294,10 @@ async def w3_get_and_cache_finalized_cid_bulk(
             consensus_status = all_results[i]
 
             # Extract status and CID from the ConsensusStatus struct
-            status, cid, _ = consensus_status
+            status, cid, timestamp = consensus_status
 
             null_cid = f'null_{epoch_id}'
-            if status is not None and cid:
+            if timestamp and cid:
                 if use_pending or status > 0:
                     redis_mapping[cid] = epoch_id
                     cids_with_epochs.append((cid, epoch_id))
