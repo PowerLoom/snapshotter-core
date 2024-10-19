@@ -13,7 +13,7 @@ from typing import Dict
 from typing import Set
 from typing import Union
 from uuid import uuid4
-
+import grpclib
 import httpx
 import sha3
 import tenacity
@@ -643,24 +643,21 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._logger.info(
             'Snapshot submission created: {}', msg,
         )
-
+        kwargs_simulation = {'simulation': False}
+        if epoch_id == 0:
+            kwargs_simulation['simulation'] = True
+        # TODO: appropriately use the create tracked task wrapper to handle exceptions as seen below
         try:
-            if epoch_id == 0:
-                # send with timeout
-                await self.send_message(msg, simulation=True)
-            else:
-                current_time = time.time()
-                if (current_time - self._last_stream_close_time) > self._stream_lifetime:
-                    await self._close_stream()
-
-                await self._create_tracked_task(self.send_message(msg))
-
+            await self.send_message(msg=msg, **kwargs_simulation)
         except Exception as e:
-            self._logger.opt(
-                exception=settings.logs.debug_mode,
-            ).error(f'Failed to send message: {e}')
-            raise Exception(f'Failed to send message: {e}')
+            if isinstance(e, grpclib.exceptions.StreamTerminatedError):
+                pass # fail silently as this is intended for the stream to be closed right after sending the message
+            else:
+                self._logger.error(f'Probable exception in _send_submission_to_collector while sending snapshot to local collector {msg}: {e}')
+        else:
+            self._logger.info('In _send_submission_to_collector successfully sent snapshot to local collector {msg}')
 
+        
     @retry(
         wait=wait_random_exponential(multiplier=1, max=10),
         stop=stop_after_attempt(3),
@@ -677,34 +674,20 @@ class GenericAsyncWorker(multiprocessing.Process):
         Raises:
             Exception: If failed to send the message.
         """
-        if simulation:
-            async with self._grpc_stub.SubmitSnapshotSimulation.open() as stream:
-                try:
-                    await stream.send_message(msg)
-                    self._logger.debug(f'Sent simulation message: {msg}')
-
-                    response = await stream.recv_message()
-                    await stream.end()
-
-                    if response and 'Success' in response.message:
-                        self._logger.info(
-                            '✅ Simulation snapshot submitted successfully: {}!', msg,
-                        )
-                    else:
-                        raise Exception(
-                            f'Failed to send simulation snapshot, got response: {response} | type: {type(response)}',
-                        )
-                except:
-                    raise Exception(f'Failed to send simulation snapshot: {msg}')
-        else:
+        async with self._grpc_stub.SubmitSnapshot.open() as stream:
             try:
-                async with self.open_stream() as stream:
-                    await stream.send_message(msg, end=True)
-                    self._logger.debug(f'Sent message: {msg}')
-                    return {'status_code': 200}
-            except Exception as e:
-                self._logger.opt(exception=settings.logs.debug_mode).error(f'Failed to send message: {e}')
-                raise Exception(f'Failed to send message: {e}')
+                await stream.send_message(msg)
+                self._logger.debug(f'Sent message to local collector: {msg}')
+                response = await stream.recv_message()
+                self._logger.debug(f'Received response from local collector for {msg}: {response}')
+                await stream.end()
+                self._logger.debug(f'gRPC stream ended for snapshot {msg}')
+            except (ConnectionResetError, grpclib.exceptions.StreamTerminatedError) as e:
+                pass # fail silently as this is intended for the stream to be closed right after sending the message
+            except asyncio.CancelledError:
+                self._logger.info('Task to send snapshot to local collector was asyncio cancelled! {}', msg)
+            else:
+                self._logger.info(f'Finalized snapshot submission to local collector without errors: {msg}')
 
     async def _init_grpc(self):
         """
