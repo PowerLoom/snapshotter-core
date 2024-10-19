@@ -13,6 +13,7 @@ from typing import Dict
 from typing import Set
 from typing import Union
 from uuid import uuid4
+
 import grpclib
 import httpx
 import sha3
@@ -650,14 +651,15 @@ class GenericAsyncWorker(multiprocessing.Process):
         try:
             await self.send_message(msg=msg, **kwargs_simulation)
         except Exception as e:
-            if isinstance(e, grpclib.exceptions.StreamTerminatedError):
-                pass # fail silently as this is intended for the stream to be closed right after sending the message
+            if 'StreamTerminatedError' in str(e):  # Doing this because we get RetryError here not StreamTerminatedError
+                pass  # fail silently as this is intended for the stream to be closed right after sending the message
             else:
-                self._logger.error(f'Probable exception in _send_submission_to_collector while sending snapshot to local collector {msg}: {e}')
+                self._logger.error(
+                    f'Probable exception in _send_submission_to_collector while sending snapshot to local collector {msg}: {e}',
+                )
         else:
             self._logger.info('In _send_submission_to_collector successfully sent snapshot to local collector {msg}')
 
-        
     @retry(
         wait=wait_random_exponential(multiplier=1, max=10),
         stop=stop_after_attempt(3),
@@ -683,7 +685,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                 await stream.end()
                 self._logger.debug(f'gRPC stream ended for snapshot {msg}')
             except (ConnectionResetError, grpclib.exceptions.StreamTerminatedError) as e:
-                pass # fail silently as this is intended for the stream to be closed right after sending the message
+                pass  # fail silently as this is intended for the stream to be closed right after sending the message
             except asyncio.CancelledError:
                 self._logger.info('Task to send snapshot to local collector was asyncio cancelled! {}', msg)
             else:
