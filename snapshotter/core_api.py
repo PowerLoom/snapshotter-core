@@ -190,12 +190,13 @@ async def get_epoch_info(
     return epoch_info
 
 
-@app.get('/last_finalized_epoch/{project_id}/{use_pending}')
+@app.get('/last_finalized_epoch/{project_id}')
 async def get_project_last_finalized_epoch_info(
     request: Request,
     response: Response,
     project_id: str,
-    use_pending: bool = False,
+    # NOTE: Setting it to true for now, but we will need to set it to false once validators are live.
+    use_pending: bool = True,
 ):
     """
     Get the last finalized epoch information for a given project.
