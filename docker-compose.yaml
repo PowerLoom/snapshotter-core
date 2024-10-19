@@ -142,6 +142,8 @@ services:
     restart: on-failure
     networks:
       - custom_network
+    volumes:
+      - ./redis_data:/data
   rabbitmq:
     image: rabbitmq:3-management
     #command: ["daemon"]

@@ -3,6 +3,7 @@ source .env
 
 rm -rf ipfs-data;
 rm -rf ipfs-export;
+rm -rf redis_data;
 
 # cleanup logs
 rm -rf logs;
