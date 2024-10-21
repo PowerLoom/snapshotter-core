@@ -11,7 +11,7 @@ from snapshotter.utils.models.settings_model import ProjectsConfig
 from snapshotter.utils.models.settings_model import Settings
 
 # Load main settings
-with open('config/settings.json', 'r') as settings_file:
+with open('snapshotter/settings/settings.json', 'r') as settings_file:
     settings_dict = json.load(settings_file)
 settings: Settings = Settings(**settings_dict)
 

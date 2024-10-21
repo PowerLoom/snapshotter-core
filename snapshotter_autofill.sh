@@ -84,8 +84,8 @@ if [ "$REDIS_PASSWORD" ]; then
     echo "Found REDIS_PASSWORD. Not echoing back.";
 fi
 
+cp snapshotter/settings/settings.example.json snapshotter/settings/settings.json
 cp config/projects.example.json config/projects.json
-cp config/settings.example.json config/settings.json
 cp config/auth_settings.example.json config/auth_settings.json
 cp config/aggregator.example.json config/aggregator.json
 
@@ -121,43 +121,43 @@ echo "Using telegram chat id: ${telegram_chat_id}"
 echo "Using REDIS_HOST: ${REDIS_HOST}"
 echo "Using REDIS_PORT: ${REDIS_PORT}"
 
-sed -i'.backup' "s#relevant-namespace#$namespace#" config/settings.json
+sed -i'.backup' "s#relevant-namespace#$namespace#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#account-address#$SIGNER_ACCOUNT_ADDRESS#" config/settings.json
-sed -i'.backup' "s#slot-id#$SLOT_ID#" config/settings.json
+sed -i'.backup' "s#account-address#$SIGNER_ACCOUNT_ADDRESS#" snapshotter/settings/settings.json
+sed -i'.backup' "s#slot-id#$SLOT_ID#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#https://rpc-url#$SOURCE_RPC_URL#" config/settings.json
+sed -i'.backup' "s#https://rpc-url#$SOURCE_RPC_URL#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#https://prost-rpc-url#$PROST_RPC_URL#" config/settings.json
+sed -i'.backup' "s#https://prost-rpc-url#$PROST_RPC_URL#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#web3-storage-token#$web3_storage_token#" config/settings.json
-sed -i'.backup' "s#ipfs-writer-url#$ipfs_url#" config/settings.json
-sed -i'.backup' "s#ipfs-writer-key#$ipfs_api_key#" config/settings.json
-sed -i'.backup' "s#ipfs-writer-secret#$ipfs_api_secret#" config/settings.json
+sed -i'.backup' "s#web3-storage-token#$web3_storage_token#" snapshotter/settings/settings.json
+sed -i'.backup' "s#ipfs-writer-url#$ipfs_url#" snapshotter/settings/settings.json
+sed -i'.backup' "s#ipfs-writer-key#$ipfs_api_key#" snapshotter/settings/settings.json
+sed -i'.backup' "s#ipfs-writer-secret#$ipfs_api_secret#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#ipfs-reader-url#$ipfs_url#" config/settings.json
-sed -i'.backup' "s#ipfs-reader-key#$ipfs_api_key#" config/settings.json
-sed -i'.backup' "s#ipfs-reader-secret#$ipfs_api_secret#" config/settings.json
+sed -i'.backup' "s#ipfs-reader-url#$ipfs_url#" snapshotter/settings/settings.json
+sed -i'.backup' "s#ipfs-reader-key#$ipfs_api_key#" snapshotter/settings/settings.json
+sed -i'.backup' "s#ipfs-reader-secret#$ipfs_api_secret#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#protocol-state-contract#$PROTOCOL_STATE_CONTRACT#" config/settings.json
-sed -i'.backup' "s#data-market-contract#$DATA_MARKET_CONTRACT#" config/settings.json
-sed -i'.backup' "s#https://slack-reporting-url#$slack_reporting_url#" config/settings.json
+sed -i'.backup' "s#protocol-state-contract#$PROTOCOL_STATE_CONTRACT#" snapshotter/settings/settings.json
+sed -i'.backup' "s#data-market-contract#$DATA_MARKET_CONTRACT#" snapshotter/settings/settings.json
+sed -i'.backup' "s#https://slack-reporting-url#$slack_reporting_url#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#https://powerloom-reporting-url#$powerloom_reporting_url#" config/settings.json
+sed -i'.backup' "s#https://powerloom-reporting-url#$powerloom_reporting_url#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#signer-account-private-key#$SIGNER_ACCOUNT_PRIVATE_KEY#" config/settings.json
+sed -i'.backup' "s#signer-account-private-key#$SIGNER_ACCOUNT_PRIVATE_KEY#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#local-collector-port#$local_collector_port#" config/settings.json
+sed -i'.backup' "s#local-collector-port#$local_collector_port#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#https://telegram-reporting-url#$telegram_reporting_url#" config/settings.json
-sed -i'.backup' "s#telegram-chat-id#$telegram_chat_id#" config/settings.json
+sed -i'.backup' "s#https://telegram-reporting-url#$telegram_reporting_url#" snapshotter/settings/settings.json
+sed -i'.backup' "s#telegram-chat-id#$telegram_chat_id#" snapshotter/settings/settings.json
 
-sed -i'.backup' "s#redis-host#$REDIS_HOST#" config/settings.json
-sed -i'.backup' "s#\"redis-port\"#$REDIS_PORT#" config/settings.json
+sed -i'.backup' "s#redis-host#$REDIS_HOST#" snapshotter/settings/settings.json
+sed -i'.backup' "s#\"redis-port\"#$REDIS_PORT#" snapshotter/settings/settings.json
 if [ "$REDIS_PASSWORD" ]; then
-    sed -i'.backup' "s#\"redis-password\"#\"$REDIS_PASSWORD\"#" config/settings.json
+    sed -i'.backup' "s#\"redis-password\"#\"$REDIS_PASSWORD\"#" snapshotter/settings/settings.json
 else
-    sed -i'.backup' "s#\"redis-password\"#null#" config/settings.json
+    sed -i'.backup' "s#\"redis-password\"#null#" snapshotter/settings/settings.json
 fi
 
 # Add the same replacements for auth_settings.json
@@ -177,8 +177,8 @@ PROST_RPC_RATE_LIMIT="${PROST_RPC_RATE_LIMIT:-10}"
 echo "Using SOURCE RPC Rate Limit: ${SOURCE_RPC_RATE_LIMIT}"
 echo "Using PROST RPC Rate Limit: ${PROST_RPC_RATE_LIMIT}"
 
-sed -i'.backup' "s/\"source-rpc-rate-limit\"/$SOURCE_RPC_RATE_LIMIT/" config/settings.json
+sed -i'.backup' "s/\"source-rpc-rate-limit\"/$SOURCE_RPC_RATE_LIMIT/" snapshotter/settings/settings.json
 
-sed -i'.backup' "s/\"prost-rpc-rate-limit\"/$PROST_RPC_RATE_LIMIT/" config/settings.json
+sed -i'.backup' "s/\"prost-rpc-rate-limit\"/$PROST_RPC_RATE_LIMIT/" snapshotter/settings/settings.json
 
 echo 'settings has been populated!'
