@@ -1,6 +1,6 @@
 const NODE_ENV = 'development';
 const MIN_UPTIME = 60000; // 1 minute in milliseconds
-const settings = require('./config/settings.json');
+const settings = require('./snapshotter/settings/settings.json');
 const { callback_worker_config } = settings;
 
 // Common configuration for all apps

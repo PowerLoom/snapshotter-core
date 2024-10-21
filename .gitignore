@@ -8,7 +8,7 @@ temp/*
 uniswapTokenData
 **/*projects.json
 **/*aggregator.json
-config/*settings.json
+snapshotter/settings/*settings.json
 **/*.backup
 .vscode/*
 snapshotter-lite-local-collector
