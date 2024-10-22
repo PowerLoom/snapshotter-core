@@ -543,6 +543,84 @@ class RpcHelper(object):
         return await f(node_idx=0)
 
     @acquire_rpc_semaphore
+    async def web3_call_with_override(self, tasks, contract_addr, abi, overrides):
+        """
+        Calls the given tasks asynchronously using web3 and returns the response.
+        Supports overriding of the contract state.
+        Args:
+            tasks (list): List of tuples of (contract functions, contract args) to call. By name.
+            contract_addr (str): Address of the contract to call.
+            abi (dict): ABI of the contract.
+            overrides (dict): State overrides for the call.
+        Returns:
+            list: List of responses from the contract function calls.
+        Raises:
+            RPCException: If an error occurs during the web3 batch call.
+        """
+        @retry(
+            reraise=True,
+            retry=retry_if_exception_type(RPCException),
+            wait=wait_random_exponential(multiplier=1, max=10),
+            stop=stop_after_attempt(settings.rpc.retry),
+            before_sleep=self._on_node_exception,
+        )
+        async def f(node_idx):
+            try:
+                node = self._nodes[node_idx]
+                contract_obj = node['web3_client_async'].eth.contract(
+                    address=contract_addr,
+                    abi=abi,
+                )
+                web3_tasks = []
+                for task in tasks:
+                    function_name, args = task
+                    function = contract_obj.functions[function_name]
+                    call_data = function(*args)._encode_transaction_data()
+                    payload = {
+                        'to': contract_addr,
+                        'data': call_data,
+                    }
+                    web3_tasks.append(
+                        self._rate_limited_call(
+                            node['web3_client_async'].eth.call(payload, state_override=overrides),
+                            node_idx,
+                        ),
+                    )
+                raw_results = await asyncio.gather(*web3_tasks)
+                # Decode the results using eth_abi
+                decoded_results = []
+                for i, result in enumerate(raw_results):
+                    function_name, _ = tasks[i]
+                    function_abi = next(func for func in abi if func['name'] == function_name)
+                    output_types = [output['type'] for output in function_abi['outputs']]
+                    decoded_result = eth_abi.decode(output_types, result)
+                    # If there's only one output, return it directly; otherwise, return the tuple
+                    decoded_results.append(decoded_result[0] if len(decoded_result) == 1 else decoded_result)
+                return decoded_results
+            except Exception as e:
+                # Create a serializable version of the tasks
+                serializable_tasks = [
+                    {
+                        'function_name': task[0],
+                        'args': task[1],
+                    } for task in tasks
+                ]
+                exc = RPCException(
+                    request=serializable_tasks,
+                    response=None,
+                    underlying_exception=e,
+                    extra_info={'msg': str(e)},
+                )
+                self._logger.opt(exception=settings.logs.debug_mode).error(
+                    (
+                        'Error while making web3 batch call'
+                    ),
+                    err=str(exc),
+                )
+                raise exc
+        return await f(node_idx=0)
+
+    @acquire_rpc_semaphore
     async def batch_web3_contract_calls(
         self,
         tasks: List[Tuple[str, List[Any]]],
