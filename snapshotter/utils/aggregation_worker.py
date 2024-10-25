@@ -277,6 +277,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         task_type = message.routing_key.split('.')[-1]
         if task_type not in self._task_types:
             return
+        await message.ack()
 
         await self.init_worker()
 
@@ -336,9 +337,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             )
             return
         await self._create_tracked_task(self._processor_task(msg_obj=msg_obj, task_type=task_type))
-        # sleep for 0.3 second
-        await asyncio.sleep(0.3)
-        await message.ack()
 
     async def _init_project_calculation_mapping(self):
         """
