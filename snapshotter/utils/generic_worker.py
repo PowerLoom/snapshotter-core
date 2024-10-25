@@ -676,20 +676,22 @@ class GenericAsyncWorker(multiprocessing.Process):
         Raises:
             Exception: If failed to send the message.
         """
-        async with self._grpc_stub.SubmitSnapshot.open() as stream:
-            try:
-                await stream.send_message(msg)
-                self._logger.debug(f'Sent message to local collector: {msg}')
-                response = await stream.recv_message()
-                self._logger.debug(f'Received response from local collector for {msg}: {response}')
-                await stream.end()
-                self._logger.debug(f'gRPC stream ended for snapshot {msg}')
-            except (ConnectionResetError, grpclib.exceptions.StreamTerminatedError) as e:
-                pass  # fail silently as this is intended for the stream to be closed right after sending the message
-            except asyncio.CancelledError:
-                self._logger.info('Task to send snapshot to local collector was asyncio cancelled! {}', msg)
-            else:
-                self._logger.info(f'Finalized snapshot submission to local collector without errors: {msg}')
+        try:
+            response = await self._grpc_stub.SubmitSnapshot(msg)
+            self._logger.debug(f'Sent message to local collector and received response: {response}')
+        except grpclib.GRPCError as e:
+            self._logger.error(f'gRPC error occurred while sending snapshot to local collector: {e}')
+            raise
+        except asyncio.CancelledError:
+            self._logger.info('Task to send snapshot to local collector was asyncio cancelled!')
+            raise
+        except Exception as e:
+            self._logger.error(f'Unexpected error occurred while sending snapshot to local collector: {e}')
+            raise
+        else:
+            self._logger.info(f'Successfully submitted snapshot to local collector: {msg}')
+        
+        return response
 
     async def _init_grpc(self):
         """
@@ -796,3 +798,4 @@ class GenericAsyncWorker(multiprocessing.Process):
                     )
                     task.cancel()
                     self._active_tasks.discard((task_start_time, task))
+
