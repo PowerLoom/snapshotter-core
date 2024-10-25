@@ -278,8 +278,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         if task_type not in self._task_types:
             return
 
-        await message.ack()
-
         await self.init_worker()
 
         self._logger.debug('task type: {}', task_type)
@@ -337,10 +335,10 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 'Unknown task type {}', task_type,
             )
             return
-        current_time = time.time()
-        task = asyncio.create_task(self._processor_task(msg_obj=msg_obj, task_type=task_type))
-        self._active_tasks.add((current_time, task))
-        task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
+        self._create_tracked_task(self._processor_task(msg_obj=msg_obj, task_type=task_type))
+        # sleep for 1 second
+        await asyncio.sleep(1)
+        await message.ack()
 
     async def _init_project_calculation_mapping(self):
         """
