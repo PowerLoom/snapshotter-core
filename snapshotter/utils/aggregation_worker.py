@@ -336,8 +336,8 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             )
             return
         self._create_tracked_task(self._processor_task(msg_obj=msg_obj, task_type=task_type))
-        # sleep for 1 second
-        await asyncio.sleep(1)
+        # sleep for 0.3 second
+        await asyncio.sleep(0.3)
         await message.ack()
 
     async def _init_project_calculation_mapping(self):
