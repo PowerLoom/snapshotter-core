@@ -401,7 +401,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             return
 
         # Start the processor task
-        self._create_tracked_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
+        await self._create_tracked_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
         # sleep for 0.3 second
         await asyncio.sleep(0.3)
         await message.ack()
