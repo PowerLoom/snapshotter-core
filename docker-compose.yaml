@@ -25,6 +25,7 @@ services:
       - BLOCK_TIME=$BLOCK_TIME
       - MAX_STREAM_POOL_SIZE=$MAX_STREAM_POOL_SIZE
       - STREAM_POOL_HEALTH_CHECK_INTERVAL=$STREAM_POOL_HEALTH_CHECK_INTERVAL
+      - ENABLE_CRON_RESTART_LOCAL_COLLECTOR=$ENABLE_CRON_RESTART_LOCAL_COLLECTOR
     command:
       bash -c  "bash server_autofill.sh && bash init_processes.sh"
     networks:
