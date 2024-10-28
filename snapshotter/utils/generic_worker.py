@@ -171,7 +171,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._running_callback_tasks: Dict[str, asyncio.Task] = dict()
         super(GenericAsyncWorker, self).__init__(name=name, **kwargs)
         self._protocol_state_contract = None
-        self._qos = 1
+        self._qos = 5
         self._rate_limiting_lua_scripts = None
 
         self.protocol_state_contract_address = Web3.to_checksum_address(settings.protocol_state.address)
