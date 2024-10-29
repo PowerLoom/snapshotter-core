@@ -195,6 +195,8 @@ async def get_project_last_finalized_epoch_info(
     request: Request,
     response: Response,
     project_id: str,
+    # NOTE: Setting it to true for now, but we will need to set it to false once validators are live.
+    use_pending: bool = True,
 ):
     """
     Get the last finalized epoch information for a given project.
@@ -210,13 +212,22 @@ async def get_project_last_finalized_epoch_info(
 
     try:
         # Find the last finalized epoch from the contract
-        [project_last_finalized_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
-            tasks=[
-                ('lastFinalizedSnapshot', [Web3.to_checksum_address(settings.data_market), project_id]),
-            ],
-            contract_addr=protocol_state_contract_address,
-            abi=protocol_state_contract_abi,
-        )
+        if use_pending:
+            [project_last_finalized_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
+                tasks=[
+                    ('lastSequencerFinalizedSnapshot', [Web3.to_checksum_address(settings.data_market), project_id]),
+                ],
+                contract_addr=protocol_state_contract_address,
+                abi=protocol_state_contract_abi,
+            )
+        else:
+            [project_last_finalized_epoch] = await request.app.state.anchor_rpc_helper.web3_call(
+                tasks=[
+                    ('lastFinalizedSnapshot', [Web3.to_checksum_address(settings.data_market), project_id]),
+                ],
+                contract_addr=protocol_state_contract_address,
+                abi=protocol_state_contract_abi,
+            )
 
         # Get epoch info for the last finalized epoch
         [epoch_info_data] = await request.app.state.anchor_rpc_helper.web3_call(

@@ -373,7 +373,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
         task_type = message.routing_key.split('.')[-1]
         if task_type not in self._task_types:
             return
-
         await message.ack()
 
         await self.init_worker()
@@ -403,10 +402,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             return
 
         # Start the processor task
-        current_time = time.time()
-        task = asyncio.create_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
-        self._active_tasks.add((current_time, task))
-        task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
+        await self._create_tracked_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
 
     async def _init_project_calculation_mapping(self):
         """

@@ -47,50 +47,48 @@ if [ -z "$OVERRIDE_DEFAULTS" ]; then
     export PROST_CHAIN_ID="11169"
 fi
 
-# Calculate subnet values based on SLOT_ID
-export DOCKER_NETWORK_NAME="snapshotter-core-${SLOT_ID}"
-SUBNET_SECOND_OCTET=$((16 + (SLOT_ID / 65536) % 16))
-SUBNET_THIRD_OCTET=$(((SLOT_ID / 256) % 256))
-export DOCKER_NETWORK_SUBNET="172.${SUBNET_SECOND_OCTET}.${SUBNET_THIRD_OCTET}.0/24"
+export DOCKER_NETWORK_NAME="snapshotter-lite-v2-${SLOT_ID}"
+# Use 172.18.0.0/16 as the base, which is within Docker's default pool
+if [ -z "$SUBNET_THIRD_OCTET" ]; then
+    SUBNET_THIRD_OCTET=1
+    echo "SUBNET_THIRD_OCTET not found in .env, setting to default value ${SUBNET_THIRD_OCTET}"
+fi
+export DOCKER_NETWORK_SUBNET="172.18.${SUBNET_THIRD_OCTET}.0/24"
+
 echo "Selected DOCKER_NETWORK_NAME: ${DOCKER_NETWORK_NAME}"
 echo "Selected DOCKER_NETWORK_SUBNET: ${DOCKER_NETWORK_SUBNET}"
 
+# Check if the first argument is "test"
+if [ "$1" = "test" ]; then
+    echo "Running subnet calculation tests..."
+    
+    # Test function for subnet calculation
+    test_subnet_calculation() {
+        local test_slot_id=$1
+        local expected_third_octet=$2
 
-# Test function for subnet calculation
-test_subnet_calculation() {
-    local test_slot_id=$1
-    local expected_second_octet=$2
-    local expected_third_octet=$3
+        SLOT_ID=$test_slot_id
+        SUBNET_THIRD_OCTET=$((SLOT_ID % 256))
+        SUBNET="172.18.${SUBNET_THIRD_OCTET}.0/24"
 
-    SLOT_ID=$test_slot_id
-    SUBNET_SECOND_OCTET=$((16 + (SLOT_ID / 65536) % 16))
-    SUBNET_THIRD_OCTET=$(((SLOT_ID / 256) % 256))
-    SUBNET="172.${SUBNET_SECOND_OCTET}.${SUBNET_THIRD_OCTET}.0/24"
-
-    if [ $SUBNET_SECOND_OCTET -eq $expected_second_octet ] && 
-        [ $SUBNET_THIRD_OCTET -eq $expected_third_octet ]; then
-        echo "Test passed for SLOT_ID $test_slot_id: $SUBNET"
-    else    
-        echo "Test failed for SLOT_ID $test_slot_id: Expected 172.$expected_second_octet.$expected_third_octet.0/24, got $SUBNET"
+        if [ $SUBNET_THIRD_OCTET -eq $expected_third_octet ]; then
+            echo "Test passed for SLOT_ID $test_slot_id: $SUBNET"
+        else    
+            echo "Test failed for SLOT_ID $test_slot_id: Expected 172.18.$expected_third_octet.0/24, got $SUBNET"
         fi
-}
+    }
 
-# Run tests
-echo "Running subnet calculation tests..."
-test_subnet_calculation 1 16 0
-test_subnet_calculation 255 16 0
-test_subnet_calculation 256 16 1
-test_subnet_calculation 1000 16 3
-test_subnet_calculation 10000 16 39
-test_subnet_calculation 65535 16 255
-test_subnet_calculation 65536 17 0
-test_subnet_calculation 100000 17 134
-test_subnet_calculation 1048575 31 255
-test_subnet_calculation 1048576 16 0
+    # Run test cases
+    test_subnet_calculation 0 0
+    test_subnet_calculation 1 1
+    test_subnet_calculation 99 99
+    test_subnet_calculation 100 100
+    test_subnet_calculation 255 255
+    test_subnet_calculation 256 0
 
-
-# Add this line to run tests before the main script logic
-[ "$1" = "--test" ] && exit 0
+    echo "Subnet calculation tests completed."
+    exit 0
+fi
 
 
 echo "testing before build..."
@@ -109,14 +107,6 @@ if [ -z "$SIGNER_ACCOUNT_PRIVATE_KEY" ]; then
     echo "SIGNER_ACCOUNT_PRIVATE_KEY not found, please set this in your .env!"
     exit 1
 fi
-
-if [ -z "$DOCKER_NETWORK_SUBNET" ]; then
-    echo "DOCKER_NETWORK_SUBNET not found, please set this in your .env!"
-    exit 1
-fi
-
-echo "DOCKER NETWORK SUBNET: ${DOCKER_NETWORK_SUBNET}"
-echo "DOCKER NETWORK NAME: ${DOCKER_NETWORK_NAME}"
 
 echo "Found SOURCE RPC URL ${SOURCE_RPC_URL}"
 echo "Found SIGNER ACCOUNT ADDRESS ${SIGNER_ACCOUNT_ADDRESS}"
@@ -141,6 +131,27 @@ if [ -z "$LOCAL_COLLECTOR_PORT" ]; then
     echo "LOCAL_COLLECTOR_PORT not found in .env, setting to default value ${LOCAL_COLLECTOR_PORT}"
 else
     echo "Found LOCAL_COLLECTOR_PORT ${LOCAL_COLLECTOR_PORT}"
+fi
+
+if [ -z "$ENABLE_CRON_RESTART_LOCAL_COLLECTOR" ]; then
+    export ENABLE_CRON_RESTART_LOCAL_COLLECTOR=true
+    echo "ENABLE_CRON_RESTART_LOCAL_COLLECTOR not found in .env, setting to default value ${ENABLE_CRON_RESTART_LOCAL_COLLECTOR}"
+else
+    echo "Found ENABLE_CRON_RESTART_LOCAL_COLLECTOR ${ENABLE_CRON_RESTART_LOCAL_COLLECTOR}"
+fi
+
+if [ "$MAX_STREAM_POOL_SIZE" ]; then
+    echo "Found MAX_STREAM_POOL_SIZE ${MAX_STREAM_POOL_SIZE}";
+else
+    export MAX_STREAM_POOL_SIZE=1024
+    echo "MAX_STREAM_POOL_SIZE not found in .env, setting to default value ${MAX_STREAM_POOL_SIZE}";
+fi
+
+if [ "$STREAM_POOL_HEALTH_CHECK_INTERVAL" ]; then
+    echo "Found STREAM_POOL_HEALTH_CHECK_INTERVAL ${STREAM_POOL_HEALTH_CHECK_INTERVAL}";
+else
+    export STREAM_POOL_HEALTH_CHECK_INTERVAL=600
+    echo "STREAM_POOL_HEALTH_CHECK_INTERVAL not found in .env, setting to default value ${STREAM_POOL_HEALTH_CHECK_INTERVAL}";
 fi
 
 # check if ufw command exists

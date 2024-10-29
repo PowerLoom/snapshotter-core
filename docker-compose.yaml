@@ -23,10 +23,17 @@ services:
       - LOCAL_COLLECTOR_PORT=$LOCAL_COLLECTOR_PORT
       - RELAYER_PRIVATE_KEY=$RELAYER_PRIVATE_KEY
       - BLOCK_TIME=$BLOCK_TIME
+      - MAX_STREAM_POOL_SIZE=$MAX_STREAM_POOL_SIZE
+      - STREAM_POOL_HEALTH_CHECK_INTERVAL=$STREAM_POOL_HEALTH_CHECK_INTERVAL
+      - ENABLE_CRON_RESTART_LOCAL_COLLECTOR=$ENABLE_CRON_RESTART_LOCAL_COLLECTOR
     command:
       bash -c  "bash server_autofill.sh && bash init_processes.sh"
     networks:
       - custom_network
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
   snapshotter-core:
     image: ${SNAPSHOTTER_IMAGE:-ghcr.io/powerloom/snapshotter-core:dockerify}
     expose:
@@ -140,6 +147,8 @@ services:
     restart: on-failure
     networks:
       - custom_network
+    volumes:
+      - ./redis_data:/data
   rabbitmq:
     image: rabbitmq:3-management
     #command: ["daemon"]
