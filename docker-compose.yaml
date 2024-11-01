@@ -41,11 +41,6 @@ services:
       - ${CORE_API_PORT:-8002}
     ports:
       - ${CORE_API_PORT-8002}:${CORE_API_PORT-8002}
-    links:
-      - "ipfs"
-      - "redis"
-      - "rabbitmq"
-      - "snapshotter-local-collector"
     depends_on:
       redis:
         condition: service_healthy
