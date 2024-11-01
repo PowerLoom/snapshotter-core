@@ -22,6 +22,7 @@ import uvloop
 from aio_pika import IncomingMessage
 from aio_pika import Message
 from aio_pika.pool import Pool
+from eth_utils import keccak
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 from httpx import AsyncClient
@@ -53,6 +54,8 @@ from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMess
 from snapshotter.utils.models.message_models import PowerloomSnapshotSubmittedMessage
 from snapshotter.utils.models.message_models import ProcessHubCommand
 from snapshotter.utils.models.settings_model import AggregateOn
+from snapshotter.utils.models.settings_model import OperationMode
+from snapshotter.utils.models.settings_model import ProjectsConfig
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import active_status_key
 from snapshotter.utils.redis.redis_keys import epoch_id_epoch_released_key
@@ -551,6 +554,13 @@ class ProcessorDistributor(multiprocessing.Process):
         self._active_tasks.add((current_time, task))
         task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
+    def _gen_pair_idx_to_compute(self, epoch: EpochBase, project_config: ProjectsConfig):
+        monitored_pairs = project_config.projects
+        current_epoch = epoch.epochId
+        snapshotter_hash = keccak(int(settings.instance_id.lower(), 16))
+        current_day = int(epoch.epochId // self._epochs_in_a_day)
+        return (current_epoch + int.from_bytes(snapshotter_hash, 'big') + settings.slot_id + current_day) % len(monitored_pairs)
+
     async def _distribute_callbacks_snapshotting(self, project_type: str, epoch: EpochBase):
         """
         Distributes callbacks for snapshotting to the appropriate snapshotters based on the project type and epoch.
@@ -562,7 +572,6 @@ class ProcessorDistributor(multiprocessing.Process):
         Returns:
             None
         """
-        # Send to snapshotters to get the balances of the addresses
         queuing_tasks = []
 
         async with self._rmq_channel_pool.acquire() as ch:
@@ -622,14 +631,10 @@ class ProcessorDistributor(multiprocessing.Process):
                 return
             static_source_project_ids = list()
             # Handling projects with data sources
-            for project in project_config.projects:
+            if settings.operation_mode == OperationMode.aggregate_node:
+                pair_idx_to_compute = self._gen_pair_idx_to_compute(epoch, project_config)
+                project = project_config.projects[pair_idx_to_compute]
                 project_id = f'{project_type}:{project}:{settings.namespace}'
-                static_source_project_ids.append(project_id)
-                if project_id.lower() in self._newly_added_projects:
-                    genesis = True
-                    self._newly_added_projects.remove(project_id.lower())
-                else:
-                    genesis = False
 
                 data_sources = project.split('_')
                 if len(data_sources) == 1:
@@ -643,7 +648,6 @@ class ProcessorDistributor(multiprocessing.Process):
                     epochId=epoch.epochId,
                     data_source=data_source,
                     primary_data_source=primary_data_source,
-                    genesis=genesis,
                 )
 
                 msg_body = Message(process_unit.json().encode('utf-8'))
@@ -654,6 +658,39 @@ class ProcessorDistributor(multiprocessing.Process):
                         message=msg_body,
                     ),
                 )
+            else:
+                for project in project_config.projects:
+                    project_id = f'{project_type}:{project}:{settings.namespace}'
+                    static_source_project_ids.append(project_id)
+                    if project_id.lower() in self._newly_added_projects:
+                        genesis = True
+                        self._newly_added_projects.remove(project_id.lower())
+                    else:
+                        genesis = False
+
+                    data_sources = project.split('_')
+                    if len(data_sources) == 1:
+                        data_source = data_sources[0]
+                        primary_data_source = None
+                    else:
+                        primary_data_source, data_source = data_sources
+                    process_unit = PowerloomSnapshotProcessMessage(
+                        begin=epoch.begin,
+                        end=epoch.end,
+                        epochId=epoch.epochId,
+                        data_source=data_source,
+                        primary_data_source=primary_data_source,
+                        genesis=genesis,
+                    )
+
+                    msg_body = Message(process_unit.json().encode('utf-8'))
+                    queuing_tasks.append(
+                        exchange.publish(
+                            routing_key=f'powerloom-backend-callback:{settings.namespace}'
+                            f':{settings.instance_id}:EpochReleased.{project_type}',
+                            message=msg_body,
+                        ),
+                    )
 
             results = await asyncio.gather(*queuing_tasks, return_exceptions=True)
             for result in results:
@@ -663,7 +700,7 @@ class ProcessorDistributor(multiprocessing.Process):
                         result,
                     )
             self._logger.info(
-                f'Sent out {len(project_config.projects)} messages to be processed by snapshot builder worker'
+                f'Sent out messages to be processed by snapshot builder worker'
                 f' for epoch {epoch.epochId}',
             )
 

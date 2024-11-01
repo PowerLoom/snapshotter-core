@@ -191,6 +191,12 @@ class SignerConfig(BaseModel):
     private_key: str
 
 
+class OperationMode(str, Enum):
+    """Operation mode configuration model."""
+    full_node = 'FullNode'
+    aggregate_node = 'AggregateNode'
+
+
 class TxSubmissionConfig(BaseModel):
     """Transaction submission configuration model."""
     enabled: bool = False
@@ -233,10 +239,10 @@ class Settings(BaseModel):
     web3storage: Web3Storage
     node_version: str
     anchor_chain_rpc: RPCConfigBase
+    operation_mode: OperationMode = OperationMode.full_node
 
 
 # Projects related models
-
 class ProcessorConfig(BaseModel):
     """Processor configuration model."""
     module: str
