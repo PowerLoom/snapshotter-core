@@ -2,6 +2,9 @@ services:
   snapshotter-local-collector:
     image: ${SNAPSHOTTER_COLLECTOR_IMAGE:-ghcr.io/powerloom/snapshotter-lite-local-collector:dockerify}
     profiles: ["local-collector"]
+    depends_on:
+      redis:
+        condition: service_healthy
     expose:
       - ${LOCAL_COLLECTOR_PORT:-50051}
     ports:
@@ -44,9 +47,12 @@ services:
       - "rabbitmq"
       - "snapshotter-local-collector"
     depends_on:
-      - "redis"
-      - "rabbitmq"
-      - "snapshotter-local-collector"
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      snapshotter-local-collector:
+        condition: service_started
     volumes:
       - ./logs/snapshotter:/logs
       - ./config:/config
