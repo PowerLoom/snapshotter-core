@@ -49,7 +49,6 @@ class PowerloomSnapshotProcessMessage(EpochBase):
     """Model for Powerloom snapshot process messages."""
     data_source: Optional[str] = None
     primary_data_source: Optional[str] = None
-    genesis: Optional[bool] = False
     bulk_mode: Optional[bool] = False
 
 
@@ -68,13 +67,6 @@ class PowerloomSnapshotBatchSubmittedMessage(BaseModel):
     batchId: int
     timestamp: int
     transactionHash: str
-
-
-class PowerloomProjectsUpdatedMessage(BaseModel):
-    """Model for Powerloom project update messages."""
-    projectId: str
-    allowed: bool
-    enableEpochId: int
 
 
 class PowerloomSnapshotSubmittedMessage(BaseModel):
@@ -110,14 +102,6 @@ class PowerloomCalculateAggregateMessage(BaseModel):
     messages: List[PowerloomSnapshotSubmittedMessage]
     epochId: int
     timestamp: int
-
-
-class ProcessHubCommand(BaseModel):
-    """Model for process hub commands."""
-    command: str
-    pid: Optional[int] = None
-    proc_str_id: Optional[str] = None
-    init_kwargs: Optional[Dict] = dict()
 
 
 class AggregateBase(BaseModel):
