@@ -273,16 +273,6 @@ def submitted_unfinalized_snapshot_cids(project_id):
     return f'projectID:{project_id}:unfinalizedSnapshots'
 
 
-def process_hub_core_start_timestamp():
-    """
-    Generate Redis key for process hub core start timestamp.
-
-    Returns:
-        str: Redis key for the process hub core start timestamp.
-    """
-    return f'processHubCoreStartTimestamp:{settings.namespace}'
-
-
 def callback_last_sent_by_issue(issue_type):
     """
     Generate Redis key for callback last sent timestamp. Stores the last sent timestamp for each issueType.

@@ -120,7 +120,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         else:
             raise ValueError(f'Unknown project type {task_type}')
 
-    async def _processor_task(
+    async def _process_task(
         self,
         msg_obj: Union[PowerloomSnapshotSubmittedMessage, PowerloomCalculateAggregateMessage],
         task_type: str,
@@ -336,7 +336,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
                 'Unknown task type {}', task_type,
             )
             return
-        await self._create_tracked_task(self._processor_task(msg_obj=msg_obj, task_type=task_type))
+        await self._create_tracked_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
 
     async def _init_project_calculation_mapping(self):
         """

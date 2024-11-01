@@ -51,7 +51,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
 
         self._q, self._rmq_routing = get_delegate_worker_request_queue_routing_key()
 
-    async def _processor_task(self, msg_obj: PowerloomDelegateWorkerRequestMessage):
+    async def _process_task(self, msg_obj: PowerloomDelegateWorkerRequestMessage):
         """
         Process a delegate task for the given message object.
 
@@ -216,7 +216,7 @@ class DelegateAsyncWorker(GenericAsyncWorker):
             return
         # Start processing the task asynchronously
         current_time = time.time()
-        task = asyncio.create_task(self._processor_task(msg_obj=msg_obj))
+        task = asyncio.create_task(self._process_task(msg_obj=msg_obj))
         self._active_tasks.add((current_time, task))
         task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 

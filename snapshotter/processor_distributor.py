@@ -46,18 +46,15 @@ from snapshotter.utils.models.data_models import SnapshotterStates
 from snapshotter.utils.models.data_models import SnapshotterStateUpdate
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
-from snapshotter.utils.models.message_models import PowerloomProjectsUpdatedMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotBatchSubmittedMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotFinalizedMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotSubmittedMessage
-from snapshotter.utils.models.message_models import ProcessHubCommand
 from snapshotter.utils.models.settings_model import AggregateOn
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import active_status_key
 from snapshotter.utils.redis.redis_keys import epoch_id_epoch_released_key
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
-from snapshotter.utils.redis.redis_keys import process_hub_core_start_timestamp
 from snapshotter.utils.redis.redis_keys import project_finalized_data_zset
 from snapshotter.utils.redis.redis_keys import project_last_finalized_epoch_key
 from snapshotter.utils.rpc import RpcHelper
@@ -110,7 +107,6 @@ class ProcessorDistributor(multiprocessing.Process):
             _payload_commit_routing_key (str): The routing key for payload commits.
             _upcoming_project_changes (defaultdict): Dictionary of upcoming project changes.
             _preload_completion_conditions (defaultdict): Dictionary of preload completion conditions.
-            _newly_added_projects (set): Set of newly added projects.
             _shutdown_initiated (bool): Flag indicating if shutdown has been initiated.
             _all_preload_tasks (set): Set of all preload tasks.
             _project_type_config_mapping (dict): Dictionary mapping project types to their configurations.
@@ -147,7 +143,6 @@ class ProcessorDistributor(multiprocessing.Process):
             dict,
         )  # epoch ID to preloading complete event
 
-        self._newly_added_projects = set()
         self._shutdown_initiated = False
         self._all_preload_tasks = set()
         self._project_type_config_mapping = dict()
@@ -233,33 +228,6 @@ class ProcessorDistributor(multiprocessing.Process):
             follow_redirects=False,
             transport=self._async_transport,
         )
-
-    async def _send_proc_hub_respawn(self):
-        """
-        Sends a respawn command to the process hub.
-
-        This method creates a ProcessHubCommand object with the command 'respawn',
-        acquires a channel from the channel pool, gets the exchange, and publishes
-        the command message to the exchange.
-
-        Args:
-            None
-
-        Returns:
-            None
-        """
-        proc_hub_cmd = ProcessHubCommand(
-            command='respawn',
-        )
-        async with self._rmq_channel_pool.acquire() as channel:
-            await channel.set_qos(10)
-            exchange = await channel.get_exchange(
-                name=f'{settings.rabbitmq.setup.core.exchange}:{settings.namespace}',
-            )
-            await exchange.publish(
-                routing_key=f'processhub-commands:{settings.namespace}:{settings.instance_id}',
-                message=Message(proc_hub_cmd.json().encode('utf-8')),
-            )
 
     async def _init_preloader_compute_mapping(self):
         """
@@ -353,19 +321,6 @@ class ProcessorDistributor(multiprocessing.Process):
             asyncio.create_task(self._cleanup_tasks())
 
         self._initialized = True
-
-    async def _get_proc_hub_start_time(self) -> int:
-        """
-        Retrieves the start time of the process hub core from Redis.
-
-        Returns:
-            int: The start time of the process hub core, or 0 if not found.
-        """
-        _ = await self._redis_conn.get(process_hub_core_start_timestamp())
-        if _:
-            return int(_)
-        else:
-            return 0
 
     async def _preloader_waiter(
         self,
@@ -538,11 +493,6 @@ class ProcessorDistributor(multiprocessing.Process):
                 'Unexpected message format of epoch callback',
             )
             return
-
-        self._newly_added_projects = self._newly_added_projects.union(
-            await self._enable_pending_projects_for_epoch(msg_obj.epochId),
-        )
-        self._logger.debug('Newly added projects for epoch {}: {}', msg_obj.epochId, self._newly_added_projects)
         self._logger.debug('Pushing epoch release to preloader coroutine: {}', msg_obj)
         current_time = time.time()
         task = asyncio.create_task(
@@ -597,16 +547,10 @@ class ProcessorDistributor(multiprocessing.Process):
             # Handling projects with no data sources
             if project_config.projects is None:
                 project_id = f'{project_type}:{settings.namespace}'
-                if project_id.lower() in self._newly_added_projects:
-                    genesis = True
-                    self._newly_added_projects.remove(project_id.lower())
-                else:
-                    genesis = False
                 process_unit = PowerloomSnapshotProcessMessage(
                     begin=epoch.begin,
                     end=epoch.end,
                     epochId=epoch.epochId,
-                    genesis=genesis,
                 )
 
                 msg_body = Message(process_unit.json().encode('utf-8'))
@@ -625,12 +569,6 @@ class ProcessorDistributor(multiprocessing.Process):
             for project in project_config.projects:
                 project_id = f'{project_type}:{project}:{settings.namespace}'
                 static_source_project_ids.append(project_id)
-                if project_id.lower() in self._newly_added_projects:
-                    genesis = True
-                    self._newly_added_projects.remove(project_id.lower())
-                else:
-                    genesis = False
-
                 data_sources = project.split('_')
                 if len(data_sources) == 1:
                     data_source = data_sources[0]
@@ -643,7 +581,6 @@ class ProcessorDistributor(multiprocessing.Process):
                     epochId=epoch.epochId,
                     data_source=data_source,
                     primary_data_source=primary_data_source,
-                    genesis=genesis,
                 )
 
                 msg_body = Message(process_unit.json().encode('utf-8'))
@@ -666,37 +603,6 @@ class ProcessorDistributor(multiprocessing.Process):
                 f'Sent out {len(project_config.projects)} messages to be processed by snapshot builder worker'
                 f' for epoch {epoch.epochId}',
             )
-
-    async def _enable_pending_projects_for_epoch(self, epoch_id) -> Set[str]:
-        """
-        Enables pending projects for the given epoch ID and returns a set of project IDs that were allowed.
-
-        Args:
-            epoch_id: The epoch ID for which to enable pending projects.
-
-        Returns:
-            A set of project IDs that were allowed.
-        """
-        pending_project_msgs: List[PowerloomProjectsUpdatedMessage] = self._upcoming_project_changes.pop(epoch_id, [])
-        if not pending_project_msgs:
-            return set()
-        else:
-            for msg_obj in pending_project_msgs:
-                # Update projects list
-                for project_type, project_config in self._project_type_config_mapping.items():
-                    projects_set = set(project_config.projects)
-                    if project_type in msg_obj.projectId:
-                        if project_config.projects is None:
-                            continue
-                        data_source = msg_obj.projectId.split(':')[-2]
-                        if msg_obj.allowed:
-                            projects_set.add(data_source)
-                        else:
-                            if data_source in project_config.projects:
-                                projects_set.discard(data_source)
-                    project_config.projects = list(projects_set)
-
-        return set([msg.projectId.lower() for msg in pending_project_msgs if msg.allowed])
 
     def _fetch_base_project_list(self, project_type: str) -> List[str]:
         """
@@ -743,25 +649,6 @@ class ProcessorDistributor(multiprocessing.Process):
                 else:
                     projects_to_wait_for.update(self._gen_projects_to_wait_for(project_type))
             return projects_to_wait_for
-
-    async def _update_all_projects(self, message: IncomingMessage):
-        """
-        Updates all projects based on the incoming message.
-
-        Args:
-            message (IncomingMessage): The incoming message containing the project updates.
-        """
-
-        event_type = message.routing_key.split('.')[-1]
-
-        if event_type == 'ProjectsUpdated':
-            msg_obj: PowerloomProjectsUpdatedMessage = (
-                PowerloomProjectsUpdatedMessage.parse_raw(message.body)
-            )
-        else:
-            return
-
-        self._upcoming_project_changes[msg_obj.enableEpochId].append(msg_obj)
 
     # NOTE: Considering SequencerFinalized state as Finalized for now
     # data data is overwritten upon receiving SnapshotFinalized message for the project
