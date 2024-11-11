@@ -61,7 +61,7 @@ echo "Selected DOCKER_NETWORK_SUBNET: ${DOCKER_NETWORK_SUBNET}"
 # Check if the first argument is "test"
 if [ "$1" = "test" ]; then
     echo "Running subnet calculation tests..."
-    
+
     # Test function for subnet calculation
     test_subnet_calculation() {
         local test_slot_id=$1
@@ -73,7 +73,7 @@ if [ "$1" = "test" ]; then
 
         if [ $SUBNET_THIRD_OCTET -eq $expected_third_octet ]; then
             echo "Test passed for SLOT_ID $test_slot_id: $SUBNET"
-        else    
+        else
             echo "Test failed for SLOT_ID $test_slot_id: Expected 172.18.$expected_third_octet.0/24, got $SUBNET"
         fi
     }
@@ -131,13 +131,6 @@ if [ -z "$LOCAL_COLLECTOR_PORT" ]; then
     echo "LOCAL_COLLECTOR_PORT not found in .env, setting to default value ${LOCAL_COLLECTOR_PORT}"
 else
     echo "Found LOCAL_COLLECTOR_PORT ${LOCAL_COLLECTOR_PORT}"
-fi
-
-if [ -z "$ENABLE_CRON_RESTART_LOCAL_COLLECTOR" ]; then
-    export ENABLE_CRON_RESTART_LOCAL_COLLECTOR=true
-    echo "ENABLE_CRON_RESTART_LOCAL_COLLECTOR not found in .env, setting to default value ${ENABLE_CRON_RESTART_LOCAL_COLLECTOR}"
-else
-    echo "Found ENABLE_CRON_RESTART_LOCAL_COLLECTOR ${ENABLE_CRON_RESTART_LOCAL_COLLECTOR}"
 fi
 
 if [ "$MAX_STREAM_POOL_SIZE" ]; then
@@ -216,4 +209,4 @@ if [ "$DEVMODE" = "false" ]; then
     $COMPOSE_CMD -f docker-compose.yaml $PROFILES pull
 fi
 
-$COMPOSE_CMD -f docker-compose.yaml $PROFILES up -V --abort-on-container-exit
+$COMPOSE_CMD -f docker-compose.yaml $PROFILES up -V --remove-orphans
