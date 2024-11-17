@@ -119,33 +119,20 @@ echo "Found SIGNER ACCOUNT ADDRESS ${SIGNER_ACCOUNT_ADDRESS}"
 [ -n "$SLACK_REPORTING_URL" ] && echo "Found SLACK_REPORTING_URL ${SLACK_REPORTING_URL}"
 [ -n "$POWERLOOM_REPORTING_URL" ] && echo "Found POWERLOOM_REPORTING_URL ${POWERLOOM_REPORTING_URL}"
 
-if [ -z "$CORE_API_PORT" ]; then
-    export CORE_API_PORT=8002
-    echo "CORE_API_PORT not found in .env, setting to default value ${CORE_API_PORT}"
-else
-    echo "Found CORE_API_PORT ${CORE_API_PORT}"
-fi
+[ -z "${CORE_API_PORT}" ] && export CORE_API_PORT=8002 && echo "CORE_API_PORT not found in .env, setting to default value ${CORE_API_PORT}"
+[ -n "${CORE_API_PORT}" ] && echo "Found CORE_API_PORT ${CORE_API_PORT}"
 
-if [ -z "$LOCAL_COLLECTOR_PORT" ]; then
-    export LOCAL_COLLECTOR_PORT=50051
-    echo "LOCAL_COLLECTOR_PORT not found in .env, setting to default value ${LOCAL_COLLECTOR_PORT}"
-else
-    echo "Found LOCAL_COLLECTOR_PORT ${LOCAL_COLLECTOR_PORT}"
-fi
+[ -z "${LOCAL_COLLECTOR_PORT}" ] && export LOCAL_COLLECTOR_PORT=50051 && echo "LOCAL_COLLECTOR_PORT not found in .env, setting to default value ${LOCAL_COLLECTOR_PORT}"
+[ -n "${LOCAL_COLLECTOR_PORT}" ] && echo "Found LOCAL_COLLECTOR_PORT ${LOCAL_COLLECTOR_PORT}"
 
-if [ "$MAX_STREAM_POOL_SIZE" ]; then
-    echo "Found MAX_STREAM_POOL_SIZE ${MAX_STREAM_POOL_SIZE}";
-else
-    export MAX_STREAM_POOL_SIZE=1024
-    echo "MAX_STREAM_POOL_SIZE not found in .env, setting to default value ${MAX_STREAM_POOL_SIZE}";
-fi
+[ -z "${MAX_STREAM_POOL_SIZE}" ] && export MAX_STREAM_POOL_SIZE=1024 && echo "MAX_STREAM_POOL_SIZE not found in .env, setting to default value ${MAX_STREAM_POOL_SIZE}"
+[ -n "${MAX_STREAM_POOL_SIZE}" ] && echo "Found MAX_STREAM_POOL_SIZE ${MAX_STREAM_POOL_SIZE}"
 
-if [ "$STREAM_POOL_HEALTH_CHECK_INTERVAL" ]; then
-    echo "Found STREAM_POOL_HEALTH_CHECK_INTERVAL ${STREAM_POOL_HEALTH_CHECK_INTERVAL}";
-else
-    export STREAM_POOL_HEALTH_CHECK_INTERVAL=600
-    echo "STREAM_POOL_HEALTH_CHECK_INTERVAL not found in .env, setting to default value ${STREAM_POOL_HEALTH_CHECK_INTERVAL}";
-fi
+[ -z "${STREAM_POOL_HEALTH_CHECK_INTERVAL}" ] && export STREAM_POOL_HEALTH_CHECK_INTERVAL=600 && echo "STREAM_POOL_HEALTH_CHECK_INTERVAL not found in .env, setting to default value ${STREAM_POOL_HEALTH_CHECK_INTERVAL}"
+[ -n "${STREAM_POOL_HEALTH_CHECK_INTERVAL}" ] && echo "Found STREAM_POOL_HEALTH_CHECK_INTERVAL ${STREAM_POOL_HEALTH_CHECK_INTERVAL}"
+
+[ -z "${DATA_MARKET_IN_REQUEST}" ] && export DATA_MARKET_IN_REQUEST=false && echo "DATA_MARKET_IN_REQUEST not found in .env, setting to default value ${DATA_MARKET_IN_REQUEST}"
+[ -n "${DATA_MARKET_IN_REQUEST}" ] && echo "Found DATA_MARKET_IN_REQUEST ${DATA_MARKET_IN_REQUEST}"
 
 # check if ufw command exists
 if command -v ufw &> /dev/null; then

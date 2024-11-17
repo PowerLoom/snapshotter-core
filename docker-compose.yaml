@@ -28,6 +28,7 @@ services:
       - BLOCK_TIME=$BLOCK_TIME
       - MAX_STREAM_POOL_SIZE=$MAX_STREAM_POOL_SIZE
       - STREAM_POOL_HEALTH_CHECK_INTERVAL=$STREAM_POOL_HEALTH_CHECK_INTERVAL
+      - DATA_MARKET_IN_REQUEST=$DATA_MARKET_IN_REQUEST
     networks:
       - custom_network
     restart: on-failure:10
