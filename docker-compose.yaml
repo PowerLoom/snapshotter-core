@@ -142,7 +142,7 @@ services:
     ports:
       - 6379:6379
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "sh", "-c", "redis-cli ping | grep -q PONG && ! redis-cli info persistence | grep -q 'loading:1'"]
       interval: 10s
       timeout: 5s
       retries: 3
