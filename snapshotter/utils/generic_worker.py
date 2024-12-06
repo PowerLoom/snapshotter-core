@@ -35,6 +35,7 @@ from httpx import Limits
 from httpx import Timeout
 from ipfs_client.dag import IPFSAsyncClientError
 from ipfs_client.main import AsyncIPFSClient
+from ipfs_client.main import AsyncIPFSClientSingleton
 from pydantic import BaseModel
 from tenacity import retry
 from tenacity import retry_if_exception_type
@@ -48,6 +49,7 @@ from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_as
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
+from snapshotter.utils.ipfs_s3_utils import S3Uploader
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
@@ -156,6 +158,9 @@ class GenericAsyncWorker(multiprocessing.Process):
     A generic asynchronous worker class for handling various tasks related to snapshot processing and submission.
     """
     _active_tasks: Set[asyncio.Task]
+    _ipfs_singleton: AsyncIPFSClientSingleton
+    _ipfs_writer_client: AsyncIPFSClient
+    _ipfs_reader_client: AsyncIPFSClient
 
     def __init__(self, name, **kwargs):
         """
@@ -258,7 +263,10 @@ class GenericAsyncWorker(multiprocessing.Process):
         Returns:
             str: The CID of the uploaded snapshot.
         """
-        snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
+        if settings.ipfs_s3_config.enabled:
+            snapshot_cid = await self._s3_uploader.upload_file(snapshot)
+        else:
+            snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
         return snapshot_cid
 
     async def generate_signature(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
@@ -690,7 +698,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             raise
         else:
             self._logger.info(f'Successfully submitted snapshot to local collector: {msg}')
-        
+
         return response
 
     async def _init_grpc(self):
@@ -742,11 +750,26 @@ class GenericAsyncWorker(multiprocessing.Process):
             self._epoch_size = epoch_size[0]
             self._logger.debug('Set epoch size to {}', self._epoch_size)
 
+    async def _init_ipfs_client(self):
+        """
+        Initialize the IPFS client.
+
+        This method creates a singleton instance of AsyncIPFSClientSingleton,
+        initializes its sessions, and assigns the write and read clients to instance variables.
+        """
+        self._ipfs_singleton = AsyncIPFSClientSingleton(settings.ipfs)
+        await self._ipfs_singleton.init_sessions()
+        self._ipfs_writer_client = self._ipfs_singleton._ipfs_write_client
+        self._ipfs_reader_client = self._ipfs_singleton._ipfs_read_client
+        if settings.ipfs_s3_config.enabled:
+            self._s3_uploader = S3Uploader(settings.ipfs_s3_config)
+
     async def init(self):
         """
         Initializes the worker by initializing the Redis pool, HTTPX client, and RPC helper.
         """
         if not self._initialized:
+            await self._init_ipfs_client()
             await self._init_redis_pool()
             await self._init_httpx_client()
             await self._init_rpc_helper()
@@ -798,4 +821,3 @@ class GenericAsyncWorker(multiprocessing.Process):
                     )
                     task.cancel()
                     self._active_tasks.discard((task_start_time, task))
-

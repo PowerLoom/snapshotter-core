@@ -57,6 +57,8 @@ services:
       - ./config:/config
       - ./computes:/computes
       - ./snapshotter:/snapshotter
+      - ./poetry.lock:/poetry.lock
+      - ./pyproject.toml:/pyproject.toml
     environment:
       - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
       - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
@@ -78,6 +80,11 @@ services:
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - IPFS_S3_CONFIG_ENABLED=$IPFS_S3_CONFIG_ENABLED
+      - IPFS_S3_CONFIG_ENDPOINT_URL=$IPFS_S3_CONFIG_ENDPOINT_URL
+      - IPFS_S3_CONFIG_BUCKET_NAME=$IPFS_S3_CONFIG_BUCKET_NAME
+      - IPFS_S3_CONFIG_ACCESS_KEY=$IPFS_S3_CONFIG_ACCESS_KEY
+      - IPFS_S3_CONFIG_SECRET_KEY=$IPFS_S3_CONFIG_SECRET_KEY
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s

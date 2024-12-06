@@ -118,6 +118,42 @@ echo "Found SIGNER ACCOUNT ADDRESS ${SIGNER_ACCOUNT_ADDRESS}"
 [ -n "$WEB3_STORAGE_TOKEN" ] && echo "Found WEB3_STORAGE_TOKEN ${WEB3_STORAGE_TOKEN}"
 [ -n "$SLACK_REPORTING_URL" ] && echo "Found SLACK_REPORTING_URL ${SLACK_REPORTING_URL}"
 [ -n "$POWERLOOM_REPORTING_URL" ] && echo "Found POWERLOOM_REPORTING_URL ${POWERLOOM_REPORTING_URL}"
+[ -n "$IPFS_S3_CONFIG_ENABLED" ] && echo "Found IPFS_S3_CONFIG_ENABLED ${IPFS_S3_CONFIG_ENABLED}"
+[ -n "$IPFS_S3_CONFIG_ENDPOINT_URL" ] && echo "Found IPFS_S3_CONFIG_ENDPOINT_URL ${IPFS_S3_CONFIG_ENDPOINT_URL}"
+[ -n "$IPFS_S3_CONFIG_BUCKET_NAME" ] && echo "Found IPFS_S3_CONFIG_BUCKET_NAME ${IPFS_S3_CONFIG_BUCKET_NAME}"
+[ -n "$IPFS_S3_CONFIG_ACCESS_KEY" ] && echo "Found IPFS_S3_CONFIG_ACCESS_KEY ${IPFS_S3_CONFIG_ACCESS_KEY}"
+[ -n "$IPFS_S3_CONFIG_SECRET_KEY" ] && echo "Found IPFS_S3_CONFIG_SECRET_KEY ${IPFS_S3_CONFIG_SECRET_KEY}"
+
+if [ -z "$IPFS_S3_CONFIG_ENABLED" ]; then
+    export IPFS_S3_CONFIG_ENABLED=false
+    echo "IPFS_S3_CONFIG_ENABLED not found in .env, setting to default value ${IPFS_S3_CONFIG_ENABLED}"
+fi
+
+# check if all other IPFS_S3_CONFIG_* variables are set
+if [ "$IPFS_S3_CONFIG_ENABLED" = "true" ]; then
+    if [ -z "$IPFS_S3_CONFIG_ENDPOINT_URL" ]; then
+        echo "IPFS_S3_CONFIG_ENDPOINT_URL not found in .env, please set this in your .env!"
+        exit 1
+    fi
+
+    if [ -z "$IPFS_S3_CONFIG_BUCKET_NAME" ]; then
+    echo "IPFS_S3_CONFIG_BUCKET_NAME not found in .env, please set this in your .env!"
+        exit 1
+    fi
+
+    if [ -z "$IPFS_S3_CONFIG_ACCESS_KEY" ]; then
+        echo "IPFS_S3_CONFIG_ACCESS_KEY not found in .env, please set this in your .env!"
+        exit 1
+    fi
+
+    if [ -z "$IPFS_S3_CONFIG_SECRET_KEY" ]; then
+        echo "IPFS_S3_CONFIG_SECRET_KEY not found in .env, please set this in your .env!"
+        exit 1
+    fi
+
+fi
+
+
 
 if [ -z "$CORE_API_PORT" ]; then
     export CORE_API_PORT=8002

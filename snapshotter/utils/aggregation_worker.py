@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import importlib
 import json
@@ -6,8 +5,6 @@ import time
 from typing import Union
 
 from aio_pika import IncomingMessage
-from ipfs_client.main import AsyncIPFSClient
-from ipfs_client.main import AsyncIPFSClientSingleton
 from pydantic import ValidationError
 
 from snapshotter.settings.config import aggregator_config
@@ -34,10 +31,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
     processing aggregation tasks, managing IPFS clients, and handling
     project-specific calculations.
     """
-
-    _ipfs_singleton: AsyncIPFSClientSingleton
-    _ipfs_writer_client: AsyncIPFSClient
-    _ipfs_reader_client: AsyncIPFSClient
 
     def __init__(self, name, **kwargs):
         """
@@ -365,17 +358,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             class_ = getattr(module, project_config.processor.class_name)
             self._project_calculation_mapping[key] = class_()
 
-    async def _init_ipfs_client(self):
-        """
-        Initialize the IPFS client.
-
-        This method sets up the IPFS singleton and initializes the write and read clients.
-        """
-        self._ipfs_singleton = AsyncIPFSClientSingleton(settings.ipfs)
-        await self._ipfs_singleton.init_sessions()
-        self._ipfs_writer_client = self._ipfs_singleton._ipfs_write_client
-        self._ipfs_reader_client = self._ipfs_singleton._ipfs_read_client
-
     async def init_worker(self):
         """
         Initialize the worker.
@@ -385,7 +367,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         """
         if not self._initialized:
             await self._init_project_calculation_mapping()
-            await self._init_ipfs_client()
             await self.init()
 
 

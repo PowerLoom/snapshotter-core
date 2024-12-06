@@ -1,12 +1,9 @@
-import asyncio
 import importlib
 import json
 import time
 from typing import Optional
 
 from aio_pika import IncomingMessage
-from ipfs_client.main import AsyncIPFSClient
-from ipfs_client.main import AsyncIPFSClientSingleton
 from pydantic import ValidationError
 
 from snapshotter.settings.config import projects_config
@@ -31,10 +28,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
     This class extends GenericAsyncWorker and provides functionality for processing
     snapshot tasks asynchronously, including IPFS operations and project-specific calculations.
     """
-
-    _ipfs_singleton: AsyncIPFSClientSingleton
-    _ipfs_writer_client: AsyncIPFSClient
-    _ipfs_reader_client: AsyncIPFSClient
 
     def __init__(self, name, **kwargs):
         """
@@ -426,18 +419,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             class_ = getattr(module, project_config.processor.class_name)
             self._project_calculation_mapping[key] = class_()
 
-    async def _init_ipfs_client(self):
-        """
-        Initialize the IPFS client.
-
-        This method creates a singleton instance of AsyncIPFSClientSingleton,
-        initializes its sessions, and assigns the write and read clients to instance variables.
-        """
-        self._ipfs_singleton = AsyncIPFSClientSingleton(settings.ipfs)
-        await self._ipfs_singleton.init_sessions()
-        self._ipfs_writer_client = self._ipfs_singleton._ipfs_write_client
-        self._ipfs_reader_client = self._ipfs_singleton._ipfs_read_client
-
     async def init_worker(self):
         """
         Initialize the worker.
@@ -447,7 +428,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
         """
         if not self._initialized:
             await self._init_project_calculation_mapping()
-            await self._init_ipfs_client()
             await self.init()
 
 
