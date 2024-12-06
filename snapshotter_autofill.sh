@@ -64,9 +64,6 @@ if [ "$TELEGRAM_CHAT_ID" ]; then
     echo "Found TELEGRAM_CHAT_ID ${TELEGRAM_CHAT_ID}";
 fi
 
-if [ "$WEB3_STORAGE_TOKEN" ]; then
-    echo "Found WEB3_STORAGE_TOKEN ${WEB3_STORAGE_TOKEN}";
-fi
 
 if [ "$NAMESPACE" ]; then
     echo "Found NAMESPACE ${NAMESPACE}";
@@ -109,7 +106,6 @@ export namespace="${NAMESPACE:-namespace_hash}"
 export ipfs_url="${IPFS_URL:-}"
 export ipfs_api_key="${IPFS_API_KEY:-}"
 export ipfs_api_secret="${IPFS_API_SECRET:-}"
-export web3_storage_token="${WEB3_STORAGE_TOKEN:-}"
 export local_collector_port="${LOCAL_COLLECTOR_PORT:-50051}"
 export slack_reporting_url="${SLACK_REPORTING_URL:-}"
 export powerloom_reporting_url="${POWERLOOM_REPORTING_URL:-}"
@@ -131,7 +127,6 @@ echo "Using protocol state contract: ${PROTOCOL_STATE_CONTRACT}"
 echo "Using data market contract: ${DATA_MARKET_CONTRACT}"
 echo "Using slack reporting url: ${slack_reporting_url}"
 echo "Using powerloom reporting url: ${powerloom_reporting_url}"
-echo "Using web3 storage token: ${web3_storage_token}"
 echo "Using telegram reporting url: ${telegram_reporting_url}"
 echo "Using telegram chat id: ${telegram_chat_id}"
 echo "Using REDIS_HOST: ${REDIS_HOST}"
@@ -146,7 +141,6 @@ sed -i'.backup' "s#https://rpc-url#$SOURCE_RPC_URL#" config/settings.json
 
 sed -i'.backup' "s#https://prost-rpc-url#$PROST_RPC_URL#" config/settings.json
 
-sed -i'.backup' "s#web3-storage-token#$web3_storage_token#" config/settings.json
 sed -i'.backup' "s#ipfs-writer-url#$ipfs_url#" config/settings.json
 sed -i'.backup' "s#ipfs-writer-key#$ipfs_api_key#" config/settings.json
 sed -i'.backup' "s#ipfs-writer-secret#$ipfs_api_secret#" config/settings.json

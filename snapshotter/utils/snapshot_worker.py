@@ -183,7 +183,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 project_id=project_id,
                 epoch=msg_obj,
                 snapshot=snapshot,
-                storage_flag=settings.web3storage.upload_snapshots,
                 _ipfs_writer_client=self._ipfs_writer_client,
             )
 
@@ -309,7 +308,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     project_id=project_id,
                     epoch=msg_obj,
                     snapshot=snapshot,
-                    storage_flag=settings.web3storage.upload_snapshots,
                     _ipfs_writer_client=self._ipfs_writer_client,
                 )
 

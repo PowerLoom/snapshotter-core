@@ -174,19 +174,6 @@ class IPFSS3Config(BaseModel):
     secret_key: str
 
 
-class Web3Storage(BaseModel):
-    """Web3 storage configuration model."""
-    upload_snapshots: bool
-    upload_aggregates: bool
-    url: str
-    upload_url_suffix: str
-    api_token: str
-    timeout: int
-    max_idle_conns: int
-    idle_conn_timeout: int
-    # rate_limit: Optional[IPFSWriterRateLimit] = None
-
-
 class RelayerService(BaseModel):
     """Relayer service configuration model."""
     host: str
@@ -240,7 +227,6 @@ class Settings(BaseModel):
     callback_worker_config: CallbackWorkerConfig
     ipfs: IPFSConfig
     ipfs_s3_config: IPFSS3Config
-    web3storage: Web3Storage
     node_version: str
     anchor_chain_rpc: RPCConfigBase
 
