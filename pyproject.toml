@@ -38,6 +38,7 @@ coincurve = "^19.0.1"
 grpclib = {extras = ["protobuf"], version = "^0.4.7"}
 grpcio-tools = "^1.62.1"
 aiolimiter = "^1.1.0"
+aioboto3 = "^13.2.0"
 
 
 [tool.poetry.group.dev.dependencies]

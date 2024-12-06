@@ -120,5 +120,4 @@ class PayloadCommitMessage(BaseModel):
 class PayloadCommitFinalizedMessage(BaseModel):
     """Model for payload commit finalized messages."""
     message: PowerloomSnapshotFinalizedMessage
-    web3Storage: bool
     sourceChainId: int

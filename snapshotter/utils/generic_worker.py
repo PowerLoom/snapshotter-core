@@ -35,6 +35,7 @@ from httpx import Limits
 from httpx import Timeout
 from ipfs_client.dag import IPFSAsyncClientError
 from ipfs_client.main import AsyncIPFSClient
+from ipfs_client.main import AsyncIPFSClientSingleton
 from pydantic import BaseModel
 from tenacity import retry
 from tenacity import retry_if_exception_type
@@ -48,6 +49,7 @@ from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_as
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
+from snapshotter.utils.ipfs_s3_utils import S3Uploader
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
@@ -78,22 +80,6 @@ class EIPRequest(EIP712Struct):
     snapshotCid = String()
     epochId = Uint()
     projectId = String()
-
-
-def web3_storage_retry_state_callback(retry_state: tenacity.RetryCallState):
-    """
-    Callback function to handle retry attempts for web3 storage upload.
-
-    Args:
-        retry_state (tenacity.RetryCallState): The current state of the retry call.
-
-    Returns:
-        None
-    """
-    if retry_state and retry_state.outcome.failed:
-        logger.warning(
-            f'Encountered web3 storage upload exception: {retry_state.outcome.exception()} | args: {retry_state.args}, kwargs:{retry_state.kwargs}',
-        )
 
 
 def submit_snapshot_retry_callback(retry_state: tenacity.RetryCallState):
@@ -156,6 +142,9 @@ class GenericAsyncWorker(multiprocessing.Process):
     A generic asynchronous worker class for handling various tasks related to snapshot processing and submission.
     """
     _active_tasks: Set[asyncio.Task]
+    _ipfs_singleton: AsyncIPFSClientSingleton
+    _ipfs_writer_client: AsyncIPFSClient
+    _ipfs_reader_client: AsyncIPFSClient
 
     def __init__(self, name, **kwargs):
         """
@@ -211,38 +200,6 @@ class GenericAsyncWorker(multiprocessing.Process):
     @retry(
         wait=wait_random_exponential(multiplier=1, max=10),
         stop=stop_after_attempt(5),
-        retry=tenacity.retry_if_not_exception_type(httpx.HTTPStatusError),
-        after=web3_storage_retry_state_callback,
-    )
-    async def _upload_web3_storage(self, snapshot: bytes):
-        """
-        Uploads the given snapshot to web3 storage.
-
-        Args:
-            snapshot (bytes): The snapshot to upload.
-
-        Returns:
-            None
-
-        Raises:
-            HTTPError: If the upload fails.
-        """
-        web3_storage_settings = settings.web3storage
-        # If no API token is provided, skip
-        if not web3_storage_settings.api_token:
-            return
-        files = {'file': snapshot}
-        r = await self._web3_storage_upload_client.post(
-            url=f'{web3_storage_settings.url}{web3_storage_settings.upload_url_suffix}',
-            files=files,
-        )
-        r.raise_for_status()
-        resp = r.json()
-        self._logger.debug('Uploaded snapshot to web3 storage: {} | Response: {}', snapshot, resp)
-
-    @retry(
-        wait=wait_random_exponential(multiplier=1, max=10),
-        stop=stop_after_attempt(5),
         retry=tenacity.retry_if_not_exception_type(IPFSAsyncClientError),
         after=ipfs_upload_retry_state_callback,
         reraise=True,
@@ -258,7 +215,10 @@ class GenericAsyncWorker(multiprocessing.Process):
         Returns:
             str: The CID of the uploaded snapshot.
         """
-        snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
+        if settings.ipfs_s3_config.enabled:
+            snapshot_cid = await self._s3_uploader.upload_file(snapshot)
+        else:
+            snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
         return snapshot_cid
 
     async def generate_signature(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
@@ -318,10 +278,9 @@ class GenericAsyncWorker(multiprocessing.Process):
                 PowerloomCalculateAggregateMessage,
             ],
             snapshot: Union[BaseModel, AggregateBase],
-            storage_flag: bool,
     ):
         """
-        Commits the given snapshot to IPFS and web3 storage (if enabled), and sends messages to the event detector and relayer
+        Commits the given snapshot to IPFS, and sends messages to the event detector and relayer
         dispatch queues.
 
         Args:
@@ -330,7 +289,6 @@ class GenericAsyncWorker(multiprocessing.Process):
             project_id (str): The ID of the project the snapshot belongs to.
             epoch (Union[PowerloomSnapshotProcessMessage, PowerloomSnapshotSubmittedMessage, PowerloomCalculateAggregateMessage]): The epoch the snapshot belongs to.
             snapshot (Union[BaseModel, AggregateBase]): The snapshot to commit.
-            storage_flag (bool): Whether to upload the snapshot to web3 storage.
 
         Returns:
             None
@@ -444,10 +402,6 @@ class GenericAsyncWorker(multiprocessing.Process):
                     },
                 )
 
-        # Upload to web3 storage
-        if storage_flag:
-            await self._create_tracked_task(self._upload_web3_storage(snapshot_bytes))
-
     async def _rabbitmq_consumer(self, loop):
         """
         Consume messages from a RabbitMQ queue.
@@ -537,19 +491,6 @@ class GenericAsyncWorker(multiprocessing.Process):
             timeout=Timeout(timeout=5.0),
             follow_redirects=False,
             transport=self._async_transport,
-        )
-        self._web3_storage_upload_transport = AsyncHTTPTransport(
-            limits=Limits(
-                max_connections=200,
-                max_keepalive_connections=settings.web3storage.max_idle_conns,
-                keepalive_expiry=settings.web3storage.idle_conn_timeout,
-            ),
-        )
-        self._web3_storage_upload_client = AsyncClient(
-            timeout=Timeout(timeout=settings.web3storage.timeout),
-            follow_redirects=False,
-            transport=self._web3_storage_upload_transport,
-            headers={'Authorization': 'Bearer ' + settings.web3storage.api_token},
         )
 
     @asynccontextmanager
@@ -690,7 +631,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             raise
         else:
             self._logger.info(f'Successfully submitted snapshot to local collector: {msg}')
-        
+
         return response
 
     async def _init_grpc(self):
@@ -742,11 +683,26 @@ class GenericAsyncWorker(multiprocessing.Process):
             self._epoch_size = epoch_size[0]
             self._logger.debug('Set epoch size to {}', self._epoch_size)
 
+    async def _init_ipfs_client(self):
+        """
+        Initialize the IPFS client.
+
+        This method creates a singleton instance of AsyncIPFSClientSingleton,
+        initializes its sessions, and assigns the write and read clients to instance variables.
+        """
+        self._ipfs_singleton = AsyncIPFSClientSingleton(settings.ipfs)
+        await self._ipfs_singleton.init_sessions()
+        self._ipfs_writer_client = self._ipfs_singleton._ipfs_write_client
+        self._ipfs_reader_client = self._ipfs_singleton._ipfs_read_client
+        if settings.ipfs_s3_config.enabled:
+            self._s3_uploader = S3Uploader(settings.ipfs_s3_config)
+
     async def init(self):
         """
         Initializes the worker by initializing the Redis pool, HTTPX client, and RPC helper.
         """
         if not self._initialized:
+            await self._init_ipfs_client()
             await self._init_redis_pool()
             await self._init_httpx_client()
             await self._init_rpc_helper()
@@ -798,4 +754,3 @@ class GenericAsyncWorker(multiprocessing.Process):
                     )
                     task.cancel()
                     self._active_tasks.discard((task_start_time, task))
-
