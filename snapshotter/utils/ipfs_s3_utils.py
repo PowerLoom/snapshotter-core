@@ -35,7 +35,6 @@ class S3Uploader:
         self.config = config
         self.session = aioboto3.Session()
         self.client = None
-        logger.info('S3Uploader initialized with config: {}', config)
 
     def _create_client(self):
         """Create a new S3 client"""
@@ -53,7 +52,7 @@ class S3Uploader:
     async def _ensure_client(self):
         """Ensure client exists and create if necessary"""
         if self.client is None:
-            self.client = self._create_client()
+            self.client = await self._create_client().__aenter__()
         return self.client
 
     @retry(
@@ -84,19 +83,18 @@ class S3Uploader:
         try:
             client = await self._ensure_client()
             random_filename = f'{uuid.uuid4()}.json'
-            async with client as s3:
-                response = await s3.put_object(
-                    Bucket=self.config.bucket_name,
-                    Key=random_filename,
-                    Body=data,
-                    Metadata={
-                        'cid-version': '1',
-                    },
-                )
+            response = await client.put_object(
+                Bucket=self.config.bucket_name,
+                Key=random_filename,
+                Body=data,
+                Metadata={
+                    'cid-version': '1',
+                },
+            )
 
-                cid = response['ResponseMetadata']['HTTPHeaders']['x-amz-meta-cid']
-                logger.success('Successfully uploaded file {} with CID: {}', random_filename, cid)
-                return cid
+            cid = response['ResponseMetadata']['HTTPHeaders']['x-amz-meta-cid']
+            logger.success('Successfully uploaded file {} with CID: {}', random_filename, cid)
+            return cid
 
         except ParamValidationError as e:
             logger.error('Parameter validation error: {}', str(e))
