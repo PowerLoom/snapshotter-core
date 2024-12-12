@@ -165,17 +165,13 @@ class ExternalAPIAuth(BaseModel):
     apiSecret: str = ''  # This is most likely used as a basic auth tuple of (username, password)
 
 
-class Web3Storage(BaseModel):
-    """Web3 storage configuration model."""
-    upload_snapshots: bool
-    upload_aggregates: bool
-    url: str
-    upload_url_suffix: str
-    api_token: str
-    timeout: int
-    max_idle_conns: int
-    idle_conn_timeout: int
-    # rate_limit: Optional[IPFSWriterRateLimit] = None
+class IPFSS3Config(BaseModel):
+    """IPFS S3 configuration model."""
+    enabled: bool
+    endpoint_url: str
+    bucket_name: str
+    access_key: str
+    secret_key: str
 
 
 class RelayerService(BaseModel):
@@ -230,7 +226,7 @@ class Settings(BaseModel):
     protocol_state: EventContract
     callback_worker_config: CallbackWorkerConfig
     ipfs: IPFSConfig
-    web3storage: Web3Storage
+    ipfs_s3_config: IPFSS3Config
     node_version: str
     anchor_chain_rpc: RPCConfigBase
 

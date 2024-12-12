@@ -57,6 +57,8 @@ services:
       - ./config:/config
       - ./computes:/computes
       - ./snapshotter:/snapshotter
+      - ./poetry.lock:/poetry.lock
+      - ./pyproject.toml:/pyproject.toml
     environment:
       - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
       - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
@@ -71,13 +73,17 @@ services:
       - LOCAL_COLLECTOR_PORT=$LOCAL_COLLECTOR_PORT
       - SLACK_REPORTING_URL=$SLACK_REPORTING_URL
       - POWERLOOM_REPORTING_URL=$POWERLOOM_REPORTING_URL
-      - WEB3_STORAGE_TOKEN=$WEB3_STORAGE_TOKEN
       - NAMESPACE=$NAMESPACE
       - TELEGRAM_REPORTING_URL=$TELEGRAM_REPORTING_URL
       - TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - IPFS_S3_CONFIG_ENABLED=$IPFS_S3_CONFIG_ENABLED
+      - IPFS_S3_CONFIG_ENDPOINT_URL=$IPFS_S3_CONFIG_ENDPOINT_URL
+      - IPFS_S3_CONFIG_BUCKET_NAME=$IPFS_S3_CONFIG_BUCKET_NAME
+      - IPFS_S3_CONFIG_ACCESS_KEY=$IPFS_S3_CONFIG_ACCESS_KEY
+      - IPFS_S3_CONFIG_SECRET_KEY=$IPFS_S3_CONFIG_SECRET_KEY
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 10s
@@ -142,7 +148,7 @@ services:
     ports:
       - 6379:6379
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "sh", "-c", "redis-cli ping | grep -q PONG && ! redis-cli info persistence | grep -q 'loading:1'"]
       interval: 10s
       timeout: 5s
       retries: 3
