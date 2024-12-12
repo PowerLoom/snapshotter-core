@@ -492,7 +492,7 @@ class EventDetectorProcess(multiprocessing.Process):
                 'EpochReleased': 'EpochReleased(address,uint256,uint256,uint256,uint256)',
                 'DayStartedEvent': 'DayStartedEvent(address,uint256,uint256)',
                 'SnapshotFinalized': 'SnapshotFinalized(address,uint256,uint256,string,string,uint256)',
-                'SnapshotBatchSubmitted': 'SnapshotBatchSubmitted(address,uint256,string,uint256,uint256)',
+                'SnapshotBatchSubmitted': 'SnapshotBatchSubmitted(address,string,uint256,uint256)',
             },
             EVENTS_ABI,
         )
