@@ -225,7 +225,7 @@ class EventDetectorProcess(multiprocessing.Process):
             elif log.event == 'SnapshotBatchSubmitted':
                 event = SnapshotBatchSubmittedEvent(
                     epochId=log.args.epochId,
-                    batchId=log.args.batchId,
+                    batchCid=log.args.batchCid,
                     timestamp=log.args.timestamp,
                     transactionHash=log.transactionHash.hex(),
                 )
