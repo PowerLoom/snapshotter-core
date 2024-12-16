@@ -369,7 +369,7 @@ class SnapshotBatchSubmittedEvent(EventBase):
     Event model for when a snapshot batch is finalized.
     """
     epochId: int
-    batchId: int
+    batchId: str
     timestamp: int
     transactionHash: str
 
