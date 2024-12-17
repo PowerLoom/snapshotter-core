@@ -76,11 +76,10 @@ async def get_project_finalized_cid(redis_conn: aioredis.Redis, state_contract_o
         # If not in cache, fetch from blockchain and cache it
         cid, _ = await w3_get_and_cache_finalized_cid(redis_conn, state_contract_obj, rpc_helper, epoch_id, project_id)
 
-    # Return the CID if it's not null
-    if 'null' not in cid:
-        return cid
-    else:
+    # Return None if CID is None (consensus not yet available) or contains 'null'
+    if cid is None or 'null' in cid:
         return None
+    return cid
 
 
 async def get_project_last_finalized_epoch(redis_conn: aioredis.Redis, state_contract_obj, rpc_helper, project_id, use_pending=True):
@@ -217,9 +216,14 @@ async def w3_get_and_cache_finalized_cid(
     # Extract status and CID from the ConsensusStatus struct
     status, cid, timestamp = consensus_status
 
-    # Process and cache the result
-    null_cid = f'null_{epoch_id}'
-    if timestamp and cid:
+    # If timestamp is 0, consensus status is not yet available
+    if timestamp == 0:
+        logger.debug(f'Consensus status not yet available for project {project_id} and epoch {epoch_id}')
+        return None, epoch_id
+
+    # Process and cache the result only if we have a valid timestamp
+    if cid:
+        null_cid = f'null_{epoch_id}'
         if use_pending or status > 0:
             await redis_conn.zadd(
                 project_finalized_data_zset(project_id),
@@ -229,7 +233,7 @@ async def w3_get_and_cache_finalized_cid(
         else:
             return null_cid, epoch_id
     else:
-        # Add null to zset if no consensus
+        # Only cache null if we're sure there's no CID (timestamp > 0 but no CID)
         await redis_conn.zadd(
             project_finalized_data_zset(project_id),
             {null_cid: epoch_id},
@@ -290,21 +294,28 @@ async def w3_get_and_cache_finalized_cid_bulk(
         # Process results and prepare for caching
         cids_with_epochs = []
         redis_mapping = {}
+        
         for i, epoch_id in enumerate(epoch_ids):
             consensus_status = all_results[i]
 
             # Extract status and CID from the ConsensusStatus struct
             status, cid, timestamp = consensus_status
 
+            # Skip if consensus status is not yet available
             null_cid = f'null_{epoch_id}'
-            if timestamp and cid:
+            if timestamp == 0:
+                logger.debug(f'Consensus status not yet available for project {project_id} and epoch {epoch_id}')
+                cids_with_epochs.append((null_cid, epoch_id))
+                continue
+
+            if cid:
                 if use_pending or status > 0:
                     redis_mapping[cid] = epoch_id
                     cids_with_epochs.append((cid, epoch_id))
                 else:
-                    redis_mapping[null_cid] = epoch_id
                     cids_with_epochs.append((null_cid, epoch_id))
             else:
+                # Only cache null if we're sure there's no CID (timestamp > 0 but no CID)
                 redis_mapping[null_cid] = epoch_id
                 cids_with_epochs.append((null_cid, epoch_id))
 
