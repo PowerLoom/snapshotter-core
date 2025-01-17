@@ -747,7 +747,24 @@ async def get_project_time_series_data(
         ipfs_reader,
         project_id,
 ):
-    """Get time series data with consistent epoch spacing"""
+    """
+    This function retrieves time series data for a project between specified time points.
+
+    Args:
+        start_time (int): Unix timestamp marking the start of the time series range.
+        end_time (int): Unix timestamp marking the end of the time series range.
+        step_seconds (int): Desired time interval between data points in seconds.
+        end_epoch_id (int): The last epoch ID to consider in the time series.
+        redis_conn (aioredis.Redis): Redis connection object for caching and retrieving data.
+        state_contract_obj: Contract object for interacting with the blockchain state.
+        rpc_helper: Helper object for making RPC calls to the blockchain.
+        ipfs_reader: IPFS client for retrieving data from IPFS storage.
+        project_id (str): Identifier of the project to fetch time series data for.
+
+    Returns:
+        List[dict]: A list of snapshot data dictionaries, each representing a data point
+                   in the time series with consistent epoch spacing.
+    """
     [
         source_chain_epoch_size,
         source_chain_block_time,
