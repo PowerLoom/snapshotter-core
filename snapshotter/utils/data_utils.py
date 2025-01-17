@@ -112,6 +112,7 @@ async def get_project_finalized_cids_bulk(
     epoch_id_min: int,
     epoch_id_max: int,
     project_id: str,
+    return_epoch_ids: bool = False,
 ) -> List[str]:
     """
     Retrieves CIDs for multiple epochs in bulk.
@@ -122,7 +123,7 @@ async def get_project_finalized_cids_bulk(
         rpc_helper (RpcHelper): Helper object for making RPC calls.
         epoch_ids (List[int]): List of epoch IDs.
         project_id (str): Project ID.
-
+        with_epoch_ids (bool): Whether to return epoch IDs along with CIDs.
     Returns:
         List[str]: List of CIDs.
     """
@@ -168,7 +169,10 @@ async def get_project_finalized_cids_bulk(
     else:
         all_cids_with_epochs = cid_data_with_epochs
 
-    return [cid for cid, _ in all_cids_with_epochs]
+    if not return_epoch_ids:
+        return [cid for cid, _ in all_cids_with_epochs]
+    else:
+        return all_cids_with_epochs
 
 
 @retry(
@@ -803,7 +807,10 @@ async def get_project_time_series_data(
     )
 
     epoch_ids = set(epoch_ids)
-    time_series_cids = [cid for cid, epoch_id in all_cids if epoch_id in epoch_ids]
+    time_series_cids = []
+    for cid, epoch_id in all_cids:
+        if epoch_id in epoch_ids:
+            time_series_cids.append(cid)
 
     data = await get_submission_data_bulk(
         redis_conn=redis_conn,
