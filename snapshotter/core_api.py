@@ -454,9 +454,8 @@ async def get_time_series_data_for_project_id(
     Returns:
         dict: The data for the given project and epoch ID.
     """
-
     try:
-
+        # Get epoch info for end timestamp
         [epoch_info_data] = await request.app.state.anchor_rpc_helper.web3_call(
             tasks=[
                 ('epochInfo', [Web3.to_checksum_address(settings.data_market), epoch_id]),
@@ -464,62 +463,58 @@ async def get_time_series_data_for_project_id(
             contract_addr=protocol_state_contract_address,
             abi=protocol_state_contract_abi,
         )
+        end_time = epoch_info_data[0]
 
-        end_timestamp = epoch_info_data[0]
-
-        observations = int((end_timestamp - start_time) / step_seconds)
-
-        if observations <= 0:
-            rest_logger.exception(
-                f'Invalid start time in get_time_series_data_for_project_id for project_id: {project_id}',
-            )
-            response.status_code = 500
+        time_range = end_time - start_time
+        if time_range <= 0:
+            response.status_code = 400
             return {
                 'status': 'error',
-                'message': f'Unable to get time series data for project_id: {project_id},'
-                f' start_time: {start_time}, step: {step_seconds}, error: Start timestamp is after current epoch timestamp',
+                'message': f'Invalid time range: start_time {start_time} is after end_time {end_time}',
             }
-        elif observations > 200:
-            rest_logger.exception(
-                f'Requested too many observations in get_time_series_data_for_project_id for project_id: {project_id}',
-            )
-            response.status_code = 500
+
+        max_observations = time_range // step_seconds
+        if max_observations > 200:
+            response.status_code = 400
             return {
                 'status': 'error',
-                'message': f'Unable to get time series data for project_id: {project_id},'
-                f' start_time: {start_time}, step: {step_seconds}, error: Too many observations requested, use smaller step size or increase start time',
+                'message': f'Too many observations ({max_observations}). Please increase step_seconds or reduce time range.',
             }
 
         data_list = await get_project_time_series_data(
-            start_time,
-            end_timestamp,
-            step_seconds,
-            epoch_id,
-            request.app.state.redis_conn,
-            request.app.state.protocol_state_contract,
-            request.app.state.anchor_rpc_helper,
-            request.app.state.ipfs_reader_client,
-            project_id,
+            start_time=start_time,
+            end_time=end_time,
+            step_seconds=step_seconds,
+            end_epoch_id=epoch_id,
+            redis_conn=request.app.state.redis_conn,
+            state_contract_obj=request.app.state.protocol_state_contract,
+            rpc_helper=request.app.state.anchor_rpc_helper,
+            ipfs_reader=request.app.state.ipfs_reader_client,
+            project_id=project_id,
         )
 
-    except Exception as e:
-        rest_logger.exception(
-            'Exception in get_time_series_data_for_project_id',
-            e=e,
+        if not any(data_list):
+            response.status_code = 404
+            return {
+                'status': 'error',
+                'message': f'No data found for time range',
+            }
+
+        rest_logger.debug(
+            f'Time series data retrieved',
+            points=len(data_list),
+            project_id=project_id,
+            start_time=start_time,
+            end_time=end_time,
+            step_seconds=step_seconds,
         )
+
+        return data_list
+
+    except Exception as e:
+        rest_logger.exception('Error getting time series data', error=str(e))
         response.status_code = 500
         return {
             'status': 'error',
-            'message': f'Unable to get time series data for project_id: {project_id},'
-            f' start_time: {start_time}, step: {step_seconds}, error: {e}',
+            'message': f'Error retrieving time series data: {str(e)}',
         }
-
-    if not any(data for data in data_list):
-        response.status_code = 404
-        return {
-            'status': 'error',
-            'message': f'No time series data found for project_id: {project_id},'
-            f' start_time: {start_time}, step: {step_seconds}',
-        }
-
-    return data_list
