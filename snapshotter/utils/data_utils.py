@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import List
+from typing import List, Dict
 
 import tenacity
 from redis import asyncio as aioredis
@@ -15,6 +15,7 @@ from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.redis.redis_keys import cid_not_found_key
 from snapshotter.utils.redis.redis_keys import project_finalized_data_zset
 from snapshotter.utils.redis.redis_keys import project_first_epoch_hmap
+from snapshotter.utils.redis.redis_keys import project_time_series_data_key
 from snapshotter.utils.redis.redis_keys import source_chain_block_time_key
 from snapshotter.utils.redis.redis_keys import source_chain_epoch_size_key
 from snapshotter.utils.redis.redis_keys import source_chain_id_key
@@ -737,16 +738,17 @@ async def get_project_epoch_snapshot_bulk(
 
 
 async def get_project_time_series_data(
-        start_time: int,
-        end_time: int,
-        step_seconds: int,
-        end_epoch_id: int,
-        redis_conn: aioredis.Redis,
-        state_contract_obj,
-        rpc_helper,
-        ipfs_reader,
-        project_id,
-):
+    start_time: int,
+    end_time: int,
+    step_seconds: int,
+    end_epoch_id: int,
+    redis_conn: aioredis.Redis,
+    state_contract_obj,
+    rpc_helper,
+    ipfs_reader,
+    project_id,
+    cache_exp: int = 30,
+) -> List[Dict]:
     """
     This function retrieves time series data for a project between specified time points.
 
@@ -762,9 +764,24 @@ async def get_project_time_series_data(
         project_id (str): Identifier of the project to fetch time series data for.
 
     Returns:
-        List[dict]: A list of snapshot data dictionaries, each representing a data point
+        List[Dict]: A list of snapshot data dictionaries, each representing a data point
                    in the time series with consistent epoch spacing.
     """
+    cache_key = project_time_series_data_key(
+        project_id=project_id,
+        start_time=start_time,
+        end_time=end_time,
+        step_seconds=step_seconds,
+        end_epoch_id=end_epoch_id,
+    )
+
+    cached_data = await redis_conn.get(cache_key)
+    if cached_data:
+        try:
+            return json.loads(cached_data)
+        except Exception as e:
+            logger.warning(f"Failed to load cached time series data: {e}")
+
     [
         source_chain_epoch_size,
         source_chain_block_time,
@@ -847,4 +864,6 @@ async def get_project_time_series_data(
             f" for project {project_id}"
         )
 
+    await redis_conn.set(cache_key, json.dumps(data), ex=cache_exp)
+    
     return data

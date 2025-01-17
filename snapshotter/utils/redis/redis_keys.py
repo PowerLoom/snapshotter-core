@@ -281,3 +281,19 @@ def callback_last_sent_by_issue(issue_type):
         str: Redis key for the callback last sent timestamp.
     """
     return f'callbackLastSentTimestamp:{settings.namespace}:{issue_type}'
+
+def project_time_series_data_key(project_id, start_time, end_time, step_seconds, end_epoch_id):
+    """
+    Generate Redis key for project time series data.
+
+    Args:
+        project_id (str): The ID of the project.
+        start_time (int): The start time of the time series.
+        end_time (int): The end time of the time series.
+        step_seconds (int): The step size of the time series.
+        end_epoch_id (int): The end epoch ID of the time series.
+
+    Returns:
+        str: Redis key for the project time series data.
+    """
+    return f'timeSeriesData:{project_id}:{start_time}:{end_time}:{step_seconds}:{end_epoch_id}'
