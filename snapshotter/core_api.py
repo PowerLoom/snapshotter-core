@@ -458,8 +458,11 @@ async def get_time_series_data_for_project_id(
     try:
 
         [epoch_info_data] = await request.app.state.anchor_rpc_helper.web3_call(
-            [request.app.state.protocol_state_contract.functions.epochInfo(epoch_id)],
-            redis_conn=request.app.state.redis_pool,
+            tasks=[
+                ('epochInfo', [Web3.to_checksum_address(settings.data_market), epoch_id]),
+            ],
+            contract_addr=protocol_state_contract_address,
+            abi=protocol_state_contract_abi,
         )
 
         end_timestamp = epoch_info_data[0]
@@ -492,7 +495,7 @@ async def get_time_series_data_for_project_id(
             end_timestamp,
             step_seconds,
             epoch_id,
-            request.app.state.redis_pool,
+            request.app.state.redis_conn,
             request.app.state.protocol_state_contract,
             request.app.state.anchor_rpc_helper,
             request.app.state.ipfs_reader_client,
