@@ -743,99 +743,84 @@ async def get_project_time_series_data(
         ipfs_reader,
         project_id,
 ):
-    """
-    Returns a list of snapshot data containing equally spaced observations starting with the start_epoch id
-    for the given project_id, and including epochs spaced step_seconds apart until the maximum observations has been reached.
-
-    Args:
-        observations: Total number of data points to gather
-        step_seconds: Time in seconds between each obsveration
-        project_last_finalized_epoch: Epoch ID of the last finalized epoch for'project_id'
-        redis_conn (aioredis.Redis): Redis connection object.
-        state_contract_obj: State contract object.
-        rpc_helper: RPC helper object.
-        ipfs_reader: IPFS reader object.
-        project_id: ID of the project to fetch snapshot data for.
-
-
-    Returns:
-        A list of snapshot data objects for the given project_id with a maximum length of the observations param.
-    """
-
-    # get metadata for building steps
+    """Get time series data with consistent epoch spacing"""
     [
         source_chain_epoch_size,
         source_chain_block_time,
         project_first_epoch,
     ] = await asyncio.gather(
-        get_source_chain_epoch_size(
-            redis_conn,
-            state_contract_obj,
-            rpc_helper,
-        ),
-        get_source_chain_block_time(
-            redis_conn,
-            state_contract_obj,
-            rpc_helper,
-        ),
-        get_project_first_epoch(
-            redis_conn,
-            state_contract_obj,
-            rpc_helper,
-            project_id,
-        ),
+        get_source_chain_epoch_size(redis_conn, state_contract_obj, rpc_helper),
+        get_source_chain_block_time(redis_conn, state_contract_obj, rpc_helper),
+        get_project_first_epoch(redis_conn, state_contract_obj, rpc_helper, project_id),
     )
 
-    seek_stop_flag = False
+    epoch_duration = source_chain_epoch_size * source_chain_block_time
+    
+    # Ensure step_seconds is aligned with epoch duration
+    if step_seconds < epoch_duration:
+        step_seconds = epoch_duration
+    elif step_seconds % epoch_duration != 0:
+        # Round up to nearest multiple of epoch_duration
+        step_seconds = ((step_seconds + epoch_duration - 1) // epoch_duration) * epoch_duration
+    
+    epochs_per_step = step_seconds // epoch_duration
 
-    closest_step_time_gap = end_time % step_seconds
-    closest_step_timestamp = end_time - closest_step_time_gap
-    closest_step_epoch_id = end_epoch_id - \
-        int(closest_step_time_gap / (source_chain_epoch_size * source_chain_block_time))
-    if closest_step_epoch_id <= project_first_epoch:
-        closest_step_epoch_id = project_first_epoch
-        seek_stop_flag = True
+    start_epoch_id = end_epoch_id - ((end_time - start_time) // epoch_duration)
+    if start_epoch_id < project_first_epoch:
+        start_epoch_id = project_first_epoch
 
-    cid_tasks = []
-    cid_tasks.append(
-        get_project_finalized_cid(
-            redis_conn,
-            state_contract_obj,
-            rpc_helper,
-            closest_step_epoch_id,
-            project_id,
-        ),
+    epoch_ids = []
+    current_epoch = end_epoch_id
+    
+    while current_epoch >= start_epoch_id:
+        epoch_ids.append(current_epoch)
+        next_epoch = current_epoch - epochs_per_step
+        if next_epoch < start_epoch_id:
+            if current_epoch != start_epoch_id:
+                epoch_ids.append(start_epoch_id)
+            break
+        current_epoch = next_epoch
+
+    epoch_ids.sort()
+    
+    logger.debug(
+        f"Time series data generated with {len(epoch_ids)} points:"
+        f" step_seconds={step_seconds},"
+        f" epoch_duration={epoch_duration},"
+        f" epochs_per_step={epochs_per_step},"
+        f" start_epoch={start_epoch_id},"
+        f" end_epoch={end_epoch_id}"
     )
 
-    remaining_observations = int((closest_step_timestamp - start_time) / step_seconds)
+    all_cids = await get_project_finalized_cids_bulk(
+        redis_conn=redis_conn,
+        state_contract_obj=state_contract_obj,
+        rpc_helper=rpc_helper,
+        epoch_id_min=min(epoch_ids),
+        epoch_id_max=max(epoch_ids),
+        project_id=project_id,
+        return_epoch_ids=True,
+    )
 
-    count = 0
-    head_epoch_id = closest_step_epoch_id
-    while not seek_stop_flag and count < remaining_observations:
-        tail_epoch_id = head_epoch_id - int(step_seconds / (source_chain_epoch_size * source_chain_block_time))
-        if tail_epoch_id <= project_first_epoch:
-            tail_epoch_id = project_first_epoch
-            seek_stop_flag = True
+    epoch_ids = set(epoch_ids)
+    time_series_cids = [cid for cid, epoch_id in all_cids if epoch_id in epoch_ids]
 
-        cid_tasks.append(
-            get_project_finalized_cid(
-                redis_conn,
-                state_contract_obj,
-                rpc_helper,
-                tail_epoch_id,
-                project_id,
-            ),
+    data = await get_submission_data_bulk(
+        redis_conn=redis_conn,
+        cids=time_series_cids,
+        ipfs_reader=ipfs_reader,
+        project_ids=[project_id] * len(time_series_cids),
+    )
+
+    if not any(data):
+        logger.warning(
+            f"No data found for any epochs between {min(epoch_ids)} and {max(epoch_ids)}"
+            f" for project {project_id}"
+        )
+    elif any(not d for d in data):
+        logger.warning(
+            f"Missing data for some epochs between {min(epoch_ids)} and {max(epoch_ids)}"
+            f" for project {project_id}"
         )
 
-        head_epoch_id = tail_epoch_id
-        count += 1
-
-    all_cids = await asyncio.gather(*cid_tasks)
-    project_ids = [project_id for _ in all_cids]
-
-    return await get_submission_data_bulk(
-        redis_conn=redis_conn,
-        cids=all_cids,
-        ipfs_reader=ipfs_reader,
-        project_ids=project_ids,
-    )
+    return data
