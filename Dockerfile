@@ -7,7 +7,7 @@ RUN npm install pm2 -g
 COPY poetry.lock pyproject.toml ./
 
 # Install the Python dependencies
-RUN poetry install --no-dev
+RUN poetry install --no-root
 
 # Copy the rest of the application's files
 COPY . .
