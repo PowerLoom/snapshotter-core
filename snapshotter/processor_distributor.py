@@ -24,10 +24,6 @@ from aio_pika import Message
 from aio_pika.pool import Pool
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
-from httpx import AsyncClient
-from httpx import AsyncHTTPTransport
-from httpx import Limits
-from httpx import Timeout
 from pydantic import ValidationError
 from redis import asyncio as aioredis
 from web3 import Web3
@@ -72,8 +68,6 @@ class ProcessorDistributor(multiprocessing.Process):
     _redis_conn: aioredis.Redis
     _rpc_helper: RpcHelper
     _anchor_rpc_helper: RpcHelper
-    _async_transport: AsyncHTTPTransport
-    _client: AsyncClient
     _snapshot_build_awaited_project_ids: Dict[int, Set[str]]  # epoch_id: project_ids
     _slot_id_to_snapshotters: Dict[int, Dict[str, str]]  # slot_id: {snapshotters}
     _slot_id_to_timeslot: Dict[int, int]  # slot_id: timeslot
@@ -211,24 +205,6 @@ class ProcessorDistributor(multiprocessing.Process):
             loop=asyncio.get_event_loop(),
         )
 
-    async def _init_httpx_client(self):
-        """
-        Initializes the HTTPX client to send reports to reporting service with the specified settings.
-        """
-        self._async_transport = AsyncHTTPTransport(
-            limits=Limits(
-                max_connections=10,
-                max_keepalive_connections=5,
-                keepalive_expiry=None,
-            ),
-        )
-        self._client = AsyncClient(
-            base_url=settings.reporting.service_url,
-            timeout=Timeout(timeout=5.0),
-            follow_redirects=False,
-            transport=self._async_transport,
-        )
-
     async def _init_preloader_compute_mapping(self):
         """
         Initializes the preloader compute mapping by importing the preloader module and class and
@@ -309,8 +285,6 @@ class ProcessorDistributor(multiprocessing.Process):
         if not self._initialized:
             await self._init_redis_pool()
             self._logger.debug('Initialized Redis pool in Processor Distributor init_worker')
-            await self._init_httpx_client()
-            self._logger.debug('Initialized httpx client in Processor Distributor init_worker')
             await self._init_rpc_helper()
             self._logger.debug('Initialized RPC helper in Processor Distributor init_worker')
             await self._init_rabbitmq_connection()
