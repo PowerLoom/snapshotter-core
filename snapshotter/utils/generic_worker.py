@@ -488,6 +488,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             ),
         )
         self._client = AsyncClient(
+            base_url=settings.reporting.slack_url,
             timeout=Timeout(timeout=5.0),
             follow_redirects=False,
             transport=self._async_transport,
