@@ -236,13 +236,6 @@ class ProjectStatus(BaseModel):
     missedSubmissions: int = 0
 
 
-class SnapshotterPing(BaseModel):
-    """
-    Ping message from a snapshotter.
-    """
-    instanceID: str
-
-
 class SnapshotterStatus(BaseModel):
     """
     Overall status of a snapshotter.
@@ -372,12 +365,3 @@ class SnapshotBatchSubmittedEvent(EventBase):
     batchCid: str
     timestamp: int
     transactionHash: str
-
-
-class TelegramEpochProcessingReportMessage(BaseModel):
-    """
-    Message model for Telegram epoch processing report.
-    """
-    chatId: str
-    slotId: int
-    issue: SnapshotterIssue
