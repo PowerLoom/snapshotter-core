@@ -100,9 +100,6 @@ class RabbitMQ(BaseModel):
 class ReportingConfig(BaseModel):
     """Reporting configuration model."""
     slack_url: str
-    service_url: str
-    telegram_url: str
-    telegram_chat_id: str
     min_reporting_interval: int
 
 

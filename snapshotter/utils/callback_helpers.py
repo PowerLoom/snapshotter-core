@@ -1,13 +1,11 @@
 import asyncio
 import functools
-import time
 from abc import ABC
 from abc import ABCMeta
 from abc import abstractmethod
 from typing import Any
 from typing import Dict
 from typing import Union
-from urllib.parse import urljoin
 
 import aio_pika
 from httpx import AsyncClient
@@ -19,7 +17,6 @@ from redis import asyncio as aioredis
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.data_models import SnapshotterIssue
-from snapshotter.utils.models.data_models import TelegramEpochProcessingReportMessage
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomDelegateWorkerRequestMessage
@@ -164,15 +161,6 @@ async def send_failure_notifications_async(
             return
 
     notification_tasks = []
-    if settings.reporting.service_url:
-        f = asyncio.create_task(
-            client.post(
-                url=urljoin(settings.reporting.service_url, '/reportIssue'),
-                json=message.dict(),
-            ),
-        )
-        f.add_done_callback(misc_notification_callback_result_handler)
-        notification_tasks.append(f)
     if settings.reporting.slack_url:
         f = asyncio.create_task(
             client.post(
@@ -194,7 +182,7 @@ def send_failure_notifications_sync(
     redis_conn: aioredis.Redis,
 ):
     """
-    Sends failure notifications synchronously to the reporting service, Slack, and Telegram.
+    Sends failure notifications synchronously to Slack.
 
     Args:
         client (SyncClient): The HTTP client to use for sending notifications.
@@ -203,36 +191,12 @@ def send_failure_notifications_sync(
     Returns:
         None
     """
-    # Send notification to the reporting service if configured
-    if settings.reporting.service_url:
-        f = functools.partial(
-            client.post,
-            url=urljoin(settings.reporting.service_url, '/reportIssue'),
-            json=message.dict(),
-        )
-        sync_notification_callback_result_handler(f)
-
     # Send notification to Slack if configured
     if settings.reporting.slack_url:
         f = functools.partial(
             client.post,
             url=settings.reporting.slack_url,
             json=message.dict(),
-        )
-        sync_notification_callback_result_handler(f)
-
-    # Send notification to Telegram if configured
-    if settings.reporting.telegram_url and settings.reporting.telegram_chat_id:
-        reporting_message = TelegramEpochProcessingReportMessage(
-            chatId=settings.reporting.telegram_chat_id,
-            slotId=settings.slot_id,
-            issue=message,
-        )
-
-        f = functools.partial(
-            client.post,
-            url=urljoin(settings.reporting.telegram_url, '/reportEpochProcessingIssue'),
-            json=reporting_message.dict(),
         )
         sync_notification_callback_result_handler(f)
 

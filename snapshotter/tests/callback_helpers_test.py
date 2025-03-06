@@ -41,10 +41,9 @@ async def mock_sync_client():
 
 
 @pytest.mark.asyncio(loop_scope='module')
-async def test_send_failure_notifications_async_with_service_and_slack_urls(mock_async_client, mock_redis):
-    """Test sending failure notifications when both service_url and slack_url are set."""
-    with patch('snapshotter.settings.config.settings.reporting.service_url', 'https://mock-service-url'), \
-            patch('snapshotter.settings.config.settings.reporting.slack_url', 'https://mock-slack-url'):
+async def test_send_failure_notifications_async_with_slack_url(mock_async_client, mock_redis):
+    """Test sending failure notifications when slack_url is set."""
+    with patch('snapshotter.settings.config.settings.reporting.slack_url', 'https://mock-slack-url'):
 
         message = SnapshotterIssue(
             instanceID='test_instance',
@@ -60,8 +59,8 @@ async def test_send_failure_notifications_async_with_service_and_slack_urls(mock
             redis_conn=mock_redis,
         )
 
-        # Assert that both service and slack notifications were sent
-        assert mock_async_client.post.call_count == 2
+        # Assert that slack notifications were sent
+        assert mock_async_client.post.call_count == 1
 
         # Verify that the current timestamp is set in Redis
         last_sent = await mock_redis.get(callback_last_sent_by_issue(message.issueType))
@@ -76,7 +75,6 @@ async def test_send_failure_notifications_async_with_service_and_slack_urls(mock
 async def test_send_failure_notifications_async_with_min_reporting_interval(mock_async_client, mock_redis):
     """Test that notifications are not sent again within the min_reporting_interval."""
     with patch('snapshotter.settings.config.settings.reporting.min_reporting_interval', 5), \
-            patch('snapshotter.settings.config.settings.reporting.service_url', 'https://mock-service-url'), \
             patch('snapshotter.settings.config.settings.reporting.slack_url', 'https://mock-slack-url'):
 
         message = SnapshotterIssue(
@@ -110,10 +108,9 @@ async def test_send_failure_notifications_async_with_min_reporting_interval(mock
 
 
 @pytest.mark.asyncio(loop_scope='module')
-async def test_send_failure_notifications_async_without_service_and_slack_urls(mock_async_client, mock_redis):
-    """Test that no notifications are sent when service_url and slack_url are not set."""
-    with patch('snapshotter.settings.config.settings.reporting.service_url', ''), \
-            patch('snapshotter.settings.config.settings.reporting.slack_url', ''):
+async def test_send_failure_notifications_async_without_slack_url(mock_async_client, mock_redis):
+    """Test that no notifications are sent when slack_url is not set."""
+    with patch('snapshotter.settings.config.settings.reporting.slack_url', ''):
 
         message = SnapshotterIssue(
             instanceID='test_instance',
@@ -146,7 +143,6 @@ async def test_send_failure_notifications_async_min_interval_expired(mock_async_
     """Test that notifications are sent again after min_reporting_interval has expired."""
     # Setup settings
     with patch('snapshotter.settings.config.settings.reporting.min_reporting_interval', 1), \
-            patch('snapshotter.settings.config.settings.reporting.service_url', 'https://mock-service-url/reportIssue'), \
             patch('snapshotter.settings.config.settings.reporting.slack_url', 'https://mock-slack-url'):
 
         # Create a sample message
@@ -187,11 +183,10 @@ async def test_send_failure_notifications_async_min_interval_expired(mock_async_
 
 
 @pytest.mark.asyncio(loop_scope='module')
-async def test_send_failure_notifications_sync_with_service_and_slack_urls(mock_sync_client):
-    """Test sending failure notifications synchronously when both service_url and slack_url are set."""
+async def test_send_failure_notifications_sync_with_slack_url(mock_sync_client):
+    """Test sending failure notifications synchronously when slack_url is set."""
     # Setup settings
-    with patch('snapshotter.settings.config.settings.reporting.service_url', 'https://mock-service-url'), \
-            patch('snapshotter.settings.config.settings.reporting.slack_url', 'https://mock-slack-url'):
+    with patch('snapshotter.settings.config.settings.reporting.slack_url', 'https://mock-slack-url'):
 
         # Create a sample message
         message = SnapshotterIssue(
@@ -210,17 +205,16 @@ async def test_send_failure_notifications_sync_with_service_and_slack_urls(mock_
             redis_conn=mock_redis,
         )
 
-        assert mock_sync_client.post.call_count == 2
+        assert mock_sync_client.post.call_count == 1
 
         # Clean up
         mock_sync_client.post.reset_mock()
 
 
-def test_send_failure_notifications_sync_without_service_and_slack_urls(mock_sync_client):
-    """Test that no notifications are sent synchronously when service_url and slack_url are not set."""
+def test_send_failure_notifications_sync_without_slack_url(mock_sync_client):
+    """Test that no notifications are sent synchronously when slack_url is not set."""
     # Setup settings
-    with patch('snapshotter.settings.config.settings.reporting.service_url', ''), \
-            patch('snapshotter.settings.config.settings.reporting.slack_url', ''):
+    with patch('snapshotter.settings.config.settings.reporting.slack_url', ''):
 
         # Create a sample message
         message = SnapshotterIssue(
