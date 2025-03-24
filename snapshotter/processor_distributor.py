@@ -4,6 +4,7 @@ import multiprocessing
 import queue
 import resource
 import sys
+import threading
 import time
 from collections import defaultdict
 from functools import lru_cache
@@ -18,10 +19,14 @@ from typing import List
 from typing import Set
 from uuid import uuid4
 
+import dramatiq
 import uvloop
 from aio_pika import IncomingMessage
 from aio_pika import Message
 from aio_pika.pool import Pool
+from dramatiq.brokers.redis import RedisBroker
+from dramatiq.middleware import AsyncIO
+from dramatiq.worker import Worker
 from eth_utils.address import to_checksum_address
 from eth_utils.crypto import keccak
 from httpx import AsyncClient
@@ -59,6 +64,21 @@ from snapshotter.utils.redis.redis_keys import project_finalized_data_zset
 from snapshotter.utils.redis.redis_keys import project_last_finalized_epoch_key
 from snapshotter.utils.rpc import RpcHelper
 
+# Configure Redis broker with no middleware
+redis_broker = RedisBroker(host=settings.redis.host, port=settings.redis.port)
+redis_broker.add_middleware(AsyncIO())
+
+# Remove Prometheus middleware to avoid errors
+middleware = redis_broker.middleware[:]  # Make a copy
+for m in middleware:
+    if m.__class__.__name__ == 'Prometheus':
+        redis_broker.middleware.remove(m)
+
+# redis_broker.middleware.clear()  # Remove ALL middlewares
+dramatiq.set_broker(redis_broker)
+
+CONSUME_QUEUE_NAME = f'powerloom-event-detector_{settings.namespace}_{settings.instance_id}'
+
 
 class ProcessorDistributor(multiprocessing.Process):
     """
@@ -81,6 +101,7 @@ class ProcessorDistributor(multiprocessing.Process):
     _last_synced_slot_info: int
     _source_chain_epoch_size: int
     _source_chain_id: int
+    _event_loop = None  # Class variable to store the event loop
 
     def __init__(self, name, **kwargs):
         """
@@ -98,10 +119,7 @@ class ProcessorDistributor(multiprocessing.Process):
             _rpc_helper: The RPC helper object.
             _source_chain_id: The source chain ID.
             _projects_list: The list of projects.
-            _consume_exchange_name (str): The name of the exchange for consuming events.
-            _consume_queue_name (str): The name of the queue for consuming events.
             _initialized (bool): Flag indicating if the ProcessorDistributor has been initialized.
-            _consume_queue_routing_key (str): The routing key for consuming events.
             _callback_exchange_name (str): The name of the exchange for callbacks.
             _payload_commit_exchange_name (str): The name of the exchange for payload commits.
             _payload_commit_routing_key (str): The routing key for payload commits.
@@ -121,13 +139,8 @@ class ProcessorDistributor(multiprocessing.Process):
         self._q = queue.Queue()
         self._rabbitmq_interactor = None
         self._shutdown_initiated = False
-        self._consume_exchange_name = f'{settings.rabbitmq.setup.event_detector.exchange}:{settings.namespace}'
-        self._consume_queue_name = (
-            f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}'
-        )
 
         self._initialized = False
-        self._consume_queue_routing_key = f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}.*'
         self._callback_exchange_name = (
             f'{settings.rabbitmq.setup.callbacks.exchange}:{settings.namespace}'
         )
@@ -163,6 +176,11 @@ class ProcessorDistributor(multiprocessing.Process):
         self._active_tasks: Set[asyncio.Task] = set()
         self._task_timeout = settings.async_task_config.task_timeout
         self._task_cleanup_interval = settings.async_task_config.task_cleanup_interval
+
+        self._handle_event_actor = dramatiq.actor(
+            queue_name=CONSUME_QUEUE_NAME,
+            actor_name='handleEvent',
+        )(self.handle_event)
 
     def _signal_handler(self, signum, frame):
         """
@@ -472,27 +490,17 @@ class ProcessorDistributor(multiprocessing.Process):
         self._active_tasks.add((current_time, preloader_task))
         preloader_task.add_done_callback(lambda _: self._active_tasks.discard((current_time, preloader_task)))
 
-    async def _epoch_release_processor(self, message: IncomingMessage):
+    async def _epoch_release_processor(self, event_data):
         """
         This method is called when an epoch is released. It enables pending projects for the epoch and executes preloaders.
 
         Args:
             message (IncomingMessage): The message containing the epoch information.
         """
-        try:
-            msg_obj: EpochBase = (
-                EpochBase.parse_raw(message.body)
-            )
-        except ValidationError:
-            self._logger.opt(exception=settings.logs.debug_mode).error(
-                'Bad message structure of epoch callback',
-            )
-            return
-        except Exception:
-            self._logger.opt(exception=settings.logs.debug_mode).error(
-                'Unexpected message format of epoch callback',
-            )
-            return
+        msg_obj: EpochBase = (
+            EpochBase.parse_raw(event_data)
+        )
+
         self._logger.debug('Pushing epoch release to preloader coroutine: {}', msg_obj)
         current_time = time.time()
         task = asyncio.create_task(
@@ -653,7 +661,7 @@ class ProcessorDistributor(multiprocessing.Process):
     # NOTE: Considering SequencerFinalized state as Finalized for now
     # data data is overwritten upon receiving SnapshotFinalized message for the project
     # TODO: Create separate states for SequencerFinalized and SnapshotFinalized
-    async def _cache_submitted_snapshot(self, message: IncomingMessage):
+    async def _cache_submitted_snapshot(self, event_data):
         """
         Caches the snapshot data and forwards it to the payload commit queue.
 
@@ -663,15 +671,10 @@ class ProcessorDistributor(multiprocessing.Process):
         Returns:
             None
         """
-        event_type = message.routing_key.split('.')[-1]
-
-        if event_type == 'SnapshotBatchSubmitted':
-            self._logger.debug(f'SnapshotBatchSubmittedEvent caught with message {message}')
-            msg_obj: PowerloomSnapshotBatchSubmittedMessage = (
-                PowerloomSnapshotBatchSubmittedMessage.parse_raw(message.body)
-            )
-        else:
-            return
+        self._logger.debug(f'SnapshotBatchSubmittedEvent caught with message {event_data}')
+        msg_obj: PowerloomSnapshotBatchSubmittedMessage = (
+            PowerloomSnapshotBatchSubmittedMessage.parse_raw(event_data)
+        )
 
         transaction_hash = msg_obj.transactionHash
 
@@ -707,7 +710,7 @@ class ProcessorDistributor(multiprocessing.Process):
                 },
             )
 
-    async def _cache_finalized_snapshot(self, message: IncomingMessage):
+    async def _cache_finalized_snapshot(self, event_data):
         """
         Caches the snapshot data and forwards it to the payload commit queue.
 
@@ -717,15 +720,10 @@ class ProcessorDistributor(multiprocessing.Process):
         Returns:
             None
         """
-        event_type = message.routing_key.split('.')[-1]
-
-        if event_type == 'SnapshotFinalized':
-            self._logger.debug(f'SnapshotFinalizedEvent caught with message {message}')
-            msg_obj: PowerloomSnapshotFinalizedMessage = (
-                PowerloomSnapshotFinalizedMessage.parse_raw(message.body)
-            )
-        else:
-            return
+        self._logger.debug(f'SnapshotFinalizedEvent caught with message {event_data}')
+        msg_obj: PowerloomSnapshotFinalizedMessage = (
+            PowerloomSnapshotFinalizedMessage.parse_raw(event_data)
+        )
 
         # set project last finalized epoch in redis
         await self._redis_conn.set(
@@ -751,32 +749,16 @@ class ProcessorDistributor(multiprocessing.Process):
 
         self._logger.trace(f'Payload Commit Message Distribution time - {int(time.time())}')
 
-    async def _distribute_callbacks_aggregate(self, message: IncomingMessage):
+    async def _distribute_callbacks_aggregate(self, event_data):
         """
         Distributes the callbacks for aggregation.
 
         :param message: IncomingMessage object containing the message to be processed.
         """
-        event_type = message.routing_key.split('.')[-1]
-        try:
-            if event_type != 'SnapshotSubmitted':
-                self._logger.error(f'Unknown event type {event_type}')
-                return
+        process_unit: PowerloomSnapshotSubmittedMessage = (
+            PowerloomSnapshotSubmittedMessage.parse_raw(event_data)
+        )
 
-            process_unit: PowerloomSnapshotSubmittedMessage = (
-                PowerloomSnapshotSubmittedMessage.parse_raw(message.body)
-            )
-
-        except ValidationError:
-            self._logger.opt(exception=settings.logs.debug_mode).error(
-                'Bad message structure of event callback',
-            )
-            return
-        except Exception:
-            self._logger.opt(exception=settings.logs.debug_mode).error(
-                'Unexpected message format of event callback',
-            )
-            return
         self._logger.trace(f'Aggregation Task Distribution time - {int(time.time())}')
 
         # go through aggregator config, if it matches then send appropriate message
@@ -884,7 +866,7 @@ class ProcessorDistributor(multiprocessing.Process):
             tasks.append(self._redis_conn.delete(*delete_keys))
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _on_rabbitmq_message(self, message: IncomingMessage):
+    async def process_event(self, event_type, event_data):
         """
         Callback function to handle incoming RabbitMQ messages.
 
@@ -894,32 +876,25 @@ class ProcessorDistributor(multiprocessing.Process):
         Returns:
             None
         """
-        await message.ack()
-
-        message_type = message.routing_key.split('.')[-1]
         self._logger.info(
             (
                 'Got message to process and distribute: {}'
             ),
-            message.body,
+            event_data,
         )
 
-        if message_type == 'EpochReleased':
-            try:
-                epoch_msg: EpochBase = EpochBase.parse_raw(message.body)
-            except:
-                pass
-            else:
-                await self._redis_conn.set(
-                    epoch_id_epoch_released_key(epoch_msg.epochId),
-                    int(time.time()),
-                )
-                current_time = time.time()
-                task = asyncio.create_task(
-                    self._cleanup_older_epoch_status(epoch_msg.epochId),
-                )
-                self._active_tasks.add((current_time, task))
-                task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
+        if event_type == 'EpochReleased':
+            epoch_msg: EpochBase = EpochBase.parse_raw(event_data)
+            await self._redis_conn.set(
+                epoch_id_epoch_released_key(epoch_msg.epochId),
+                int(time.time()),
+            )
+            current_time = time.time()
+            task = asyncio.create_task(
+                self._cleanup_older_epoch_status(epoch_msg.epochId),
+            )
+            self._active_tasks.add((current_time, task))
+            task.add_done_callback(lambda _: self._active_tasks.discard((current_time, task)))
 
             _ = await self._redis_conn.get(active_status_key)
             if _:
@@ -927,59 +902,57 @@ class ProcessorDistributor(multiprocessing.Process):
                 if not active_status:
                     self._logger.error('System is not active, ignoring released Epoch')
                 else:
-                    await self._epoch_release_processor(message)
+                    await self._epoch_release_processor(event_data)
 
-        elif message_type == 'SnapshotSubmitted':
+        elif event_type == 'SnapshotSubmitted':
             await self._distribute_callbacks_aggregate(
-                message,
+                event_data,
             )
 
-        elif message_type == 'SnapshotFinalized':
-            self._logger.debug(f'SnapshotFinalizedEvent caught with message {message}')
+        elif event_type == 'SnapshotFinalized':
             await self._cache_finalized_snapshot(
-                message,
+                event_data,
             )
 
-        elif message_type == 'SnapshotBatchSubmitted':
+        elif event_type == 'SnapshotBatchSubmitted':
             await self._cache_submitted_snapshot(
-                message,
+                event_data,
             )
 
         else:
             self._logger.error(
                 (
-                    'Unknown routing key for callback distribution: {}'
+                    'Unknown message type: {}'
                 ),
-                message.routing_key,
+                event_type,
             )
 
         if self._redis_conn:
             await self._redis_conn.close()
 
-    async def _rabbitmq_consumer(self, loop):
+    def handle_event(self, *args):
         """
-        Consume messages from a RabbitMQ queue.
-
-        Args:
-            loop: The event loop to use for the consumer.
-
-        Returns:
-            None
+        Handle event without being an async function directly.
+        This allows Dramatiq to call it normally while still using your async code.
         """
-        async with self._rmq_channel_pool.acquire() as channel:
-            await channel.set_qos(10)
-            exchange = await channel.get_exchange(
-                name=self._consume_exchange_name,
+        try:
+            event_type = args[0]
+            event_data = args[1]
+            if not ProcessorDistributor._event_loop:
+                self._logger.error('Event loop not initialized')
+                return None
+
+            # Run the async process_event in the event loop
+            future = asyncio.run_coroutine_threadsafe(
+                self.process_event(event_type, event_data),
+                self._event_loop,
             )
-            q_obj = await channel.get_queue(
-                name=self._consume_queue_name,
-                ensure=False,
-            )
-            self._logger.debug(
-                f'Consuming queue {self._consume_queue_name} with routing key {self._consume_queue_routing_key}...',
-            )
-            await q_obj.bind(exchange, routing_key=self._consume_queue_routing_key)
-            await q_obj.consume(self._on_rabbitmq_message)
+            # Wait for the result
+            future.result()  # 60 second timeout
+            return None
+        except Exception as e:
+            self._logger.error(f'Error processing event: {e}')
+            self._logger.error(f'Event data: {args}')
 
     async def _cleanup_tasks(self):
         """
@@ -1014,12 +987,19 @@ class ProcessorDistributor(multiprocessing.Process):
         asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
         ev_loop = asyncio.get_event_loop()
+        ProcessorDistributor._event_loop = ev_loop  # Store the event loop
+        # Update the middleware to use this event loop
+        for middleware in redis_broker.middleware:
+            if isinstance(middleware, dramatiq.middleware.AsyncIO):
+                middleware.event_loop = ev_loop
+
         ev_loop.run_until_complete(self.init_worker())
 
-        self._logger.debug('Starting RabbitMQ consumer on queue {} for Processor Distributor', self._consume_queue_name)
-        self._core_rmq_consumer = asyncio.ensure_future(
-            self._rabbitmq_consumer(ev_loop),
-        )
+        # Start a Dramatiq worker in a separate thread
+        worker = Worker(redis_broker, queues=[CONSUME_QUEUE_NAME])
+        worker_thread = threading.Thread(target=worker.start, daemon=True)
+        worker_thread.start()
+
         try:
             ev_loop.run_forever()
         finally:

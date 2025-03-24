@@ -1,11 +1,9 @@
 import asyncio
 import json
 import multiprocessing
-import queue
 import resource
 import signal
 import sys
-import threading
 import time
 from functools import wraps
 from signal import SIGINT
@@ -13,6 +11,8 @@ from signal import SIGQUIT
 from signal import SIGTERM
 from typing import Union
 
+import dramatiq
+from dramatiq.brokers.redis import RedisBroker
 from redis import asyncio as aioredis
 from web3 import Web3
 
@@ -23,7 +23,6 @@ from snapshotter.utils.file_utils import read_json_file
 from snapshotter.utils.models.data_models import EpochReleasedEvent
 from snapshotter.utils.models.data_models import SnapshotBatchSubmittedEvent
 from snapshotter.utils.models.data_models import SnapshotFinalizedEvent
-from snapshotter.utils.rabbitmq_helpers import RabbitmqThreadedSelectLoopInteractor
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import event_detector_last_processed_block
 from snapshotter.utils.redis.redis_keys import last_epoch_detected_epoch_id_key
@@ -32,9 +31,14 @@ from snapshotter.utils.rpc import get_event_sig_and_abi
 from snapshotter.utils.rpc import RpcHelper
 
 
-def rabbitmq_and_redis_cleanup(fn):
+# Setup Dramatiq with Redis broker for sending only
+redis_broker = RedisBroker(host=settings.redis.host, port=settings.redis.port)
+dramatiq.set_broker(redis_broker)
+
+
+def redis_cleanup(fn):
     """
-    A decorator function that wraps the given function and handles cleanup of RabbitMQ and Redis connections in case of
+    A decorator function that wraps the given function and handles cleanup of Redis connections in case of
     a GenericExitOnSignal or KeyboardInterrupt exception.
 
     Args:
@@ -49,11 +53,6 @@ def rabbitmq_and_redis_cleanup(fn):
             fn(self, *args, **kwargs)
         except (GenericExitOnSignal, KeyboardInterrupt):
             try:
-                self._logger.debug(
-                    'Waiting for RabbitMQ interactor thread to join...',
-                )
-                self._rabbitmq_thread.join()
-                self._logger.debug('RabbitMQ interactor thread joined.')
                 if self._last_processed_block:
                     self._logger.debug(
                         'Saving last processed epoch to redis...',
@@ -79,17 +78,13 @@ def rabbitmq_and_redis_cleanup(fn):
 
 class EventDetectorProcess(multiprocessing.Process):
     """
-    A class for detecting system events using RabbitMQ and Redis.
+    A class for detecting system events and sending them using Dramatiq with Redis.
 
     Attributes:
-        _rabbitmq_thread (threading.Thread): The RabbitMQ thread.
-        _rabbitmq_queue (queue.Queue): The RabbitMQ queue.
         _redis_conn (aioredis.Redis): The Redis connection.
         _redis_pool (RedisPoolCache): The Redis connection pool.
     """
 
-    _rabbitmq_thread: threading.Thread
-    _rabbitmq_queue: queue.Queue
     _redis_conn: aioredis.Redis
     _redis_pool: RedisPoolCache
 
@@ -102,15 +97,12 @@ class EventDetectorProcess(multiprocessing.Process):
             **kwargs: Additional keyword arguments to be passed to the multiprocessing.Process class.
         """
         multiprocessing.Process.__init__(self, name=name, **kwargs)
-        self._rabbitmq_thread: threading.Thread
-        self._rabbitmq_queue = queue.Queue()
         self._shutdown_initiated = False
 
-        self._exchange = (
-            f'{settings.rabbitmq.setup.event_detector.exchange}:{settings.namespace}'
-        )
-        self._routing_key_prefix = (
-            f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}.'
+        self._namespace = settings.namespace
+        self._instance_id = settings.instance_id
+        self.queue_name = (
+            f'powerloom-event-detector_{settings.namespace}_{settings.instance_id}'
         )
 
         self._last_processed_block = None
@@ -138,7 +130,8 @@ class EventDetectorProcess(multiprocessing.Process):
         broadcasting simulation submission, and waiting for simulation completion.
         """
         self._logger.debug(
-            'Initializing SystemEventDetector. Awaiting local collector initialization and bootstrapping for 15 seconds...',
+            'Initializing SystemEventDetector. Awaiting local collector initialization and '
+            'bootstrapping for 15 seconds...',
         )
         await asyncio.sleep(15)
         await self._broadcast_simulation_submission()
@@ -256,19 +249,6 @@ class EventDetectorProcess(multiprocessing.Process):
             self._logger.debug('No events detected in block range on Prost network {}-{}', from_block, to_block)
         return events
 
-    def _interactor_wrapper(self, q: queue.Queue):
-        """
-        A wrapper method that runs in a separate thread and initializes a RabbitmqThreadedSelectLoopInteractor object.
-
-        Args:
-            q (queue.Queue): A queue object that is used to publish messages to RabbitMQ.
-        """
-        self._rabbitmq_interactor = RabbitmqThreadedSelectLoopInteractor(
-            publish_queue=q,
-            consumer_worker_name=self.name,
-        )
-        self._rabbitmq_interactor.run()  # blocking
-
     def _generic_exit_handler(self, signum, sigframe):
         """
         Handles the generic exit signal and initiates shutdown.
@@ -285,12 +265,15 @@ class EventDetectorProcess(multiprocessing.Process):
             not self._shutdown_initiated
         ):
             self._shutdown_initiated = True
-            self._rabbitmq_interactor.stop()
             raise GenericExitOnSignal
 
-    def _broadcast_event(self, event_type: str, event: Union[EpochReleasedEvent, SnapshotFinalizedEvent, SnapshotBatchSubmittedEvent]):
+    def _broadcast_event(
+        self,
+        event_type: str,
+        event: Union[EpochReleasedEvent, SnapshotFinalizedEvent, SnapshotBatchSubmittedEvent],
+    ):
         """
-        Broadcasts the given event to the RabbitMQ queue.
+        Broadcasts the given event using Dramatiq.
 
         Args:
             event_type (str): The type of the event being broadcasted.
@@ -298,22 +281,29 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         if not self._simulation_completed and event.epochId != 0:
             self._logger.debug(
-                'Skipping event broadcast to RabbitMQ for epoch {} as simulation is not complete. Incoming event: {}', event.epochId, event,
+                'Skipping event broadcast for epoch {} as simulation is not complete. '
+                'Incoming event: {}',
+                event.epochId,
+                event,
             )
             return
         self._logger.debug('Broadcasting event: {}', event)
-        brodcast_msg = (
-            event.json().encode('utf-8'),
-            self._exchange,
-            f'{self._routing_key_prefix}{event_type}',
+
+        dramatiq.broker.get_broker().enqueue(
+            dramatiq.Message(
+                queue_name=self.queue_name,
+                actor_name='handleEvent',  # Match actor name with event_receiver.py
+                args=(event_type, event.json()),
+                kwargs={},
+                options={},
+            ),
         )
-        self._rabbitmq_queue.put(brodcast_msg)
 
     async def _detect_events(self):
         """
         Continuously detects events by fetching the current block and comparing it to the last processed block.
-        If the last processed block is too far behind the current block, it processes the current block and broadcasts the events.
-        The last processed block is saved in Redis for future reference.
+        If the last processed block is too far behind the current block, it processes the current block and
+        broadcasts the events. The last processed block is saved in Redis for future reference.
         """
         while True:
             try:
@@ -424,14 +414,13 @@ class EventDetectorProcess(multiprocessing.Process):
         await self._anchor_rpc_helper.init()
         await self._source_rpc_helper.init()
 
-    @rabbitmq_and_redis_cleanup
+    @redis_cleanup
     def run(self):
         """
         Starts the event detection process.
 
         This method initializes the necessary components, sets up signal handlers,
-        starts the RabbitMQ thread, initializes RPC connections, and begins the
-        event detection loop.
+        initializes RPC connections, and begins the event detection loop.
         """
         # Initialize the event loop
         self.ev_loop = asyncio.get_event_loop()
@@ -456,13 +445,6 @@ class EventDetectorProcess(multiprocessing.Process):
         # Set up signal handlers
         for signame in [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]:
             signal.signal(signame, self._generic_exit_handler)
-
-        # Start the RabbitMQ thread
-        self._rabbitmq_thread = threading.Thread(
-            target=self._interactor_wrapper,
-            kwargs={'q': self._rabbitmq_queue},
-        )
-        self._rabbitmq_thread.start()
 
         # Initialize RPC connections
         self.ev_loop.run_until_complete(self._init_rpc())
