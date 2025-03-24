@@ -87,7 +87,7 @@ class RabbitmqSelectLoopInteractor(object):
 
     def __init__(
         self,
-        consume_queue_name=None,
+        EVENT_DETECTOR_QUEUE_NAME=None,
         consume_callback=None,
         consumer_worker_name='',
     ):
@@ -109,7 +109,7 @@ class RabbitmqSelectLoopInteractor(object):
         self._exchange = None
         self._routing_key = None
         self._consuming = False
-        self._consume_queue = consume_queue_name
+        self._consume_queue = EVENT_DETECTOR_QUEUE_NAME
         self._consume_callback = consume_callback
         # In production, experiment with higher prefetch values
         # for higher consumer throughput
@@ -666,7 +666,7 @@ class RabbitmqThreadedSelectLoopInteractor(object):
     def __init__(
         self,
         publish_queue: queue.Queue,
-        consume_queue_name=None,
+        EVENT_DETECTOR_QUEUE_NAME=None,
         consume_callback=None,
         consumer_worker_name='',
     ):
@@ -689,7 +689,7 @@ class RabbitmqThreadedSelectLoopInteractor(object):
         self._exchange = None
         self._routing_key = None
         self._consuming = False
-        self._consume_queue = consume_queue_name
+        self._consume_queue = EVENT_DETECTOR_QUEUE_NAME
         self._consume_callback = consume_callback
         self._publish_queue = publish_queue
 

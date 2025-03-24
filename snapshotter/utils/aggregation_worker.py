@@ -1,16 +1,29 @@
+import asyncio
 import hashlib
 import importlib
 import json
+import resource
+import threading
 import time
+from signal import SIGINT
+from signal import signal
+from signal import SIGQUIT
+from signal import SIGTERM
 from typing import Union
 
+import dramatiq
+import uvloop
 from aio_pika import IncomingMessage
+from dramatiq.brokers.redis import RedisBroker
+from dramatiq.middleware import AsyncIO
+from dramatiq.worker import Worker
 from pydantic import ValidationError
 
 from snapshotter.settings.config import aggregator_config
 from snapshotter.settings.config import projects_config
 from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
+from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.generic_worker import GenericAsyncWorker
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
@@ -21,6 +34,22 @@ from snapshotter.utils.models.message_models import PowerloomSnapshotSubmittedMe
 from snapshotter.utils.models.settings_model import AggregateOn
 from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
+
+AGGREGATION_QUEUE_NAME = f'powerloom-aggregator_{settings.namespace}_{settings.instance_id}'
+logger = default_logger.bind(module='AggregationWorker')
+
+# Configure Redis broker with no middleware
+redis_broker = RedisBroker(host=settings.redis.host, port=settings.redis.port)
+redis_broker.add_middleware(AsyncIO())
+
+# Remove Prometheus middleware to avoid errors
+middleware = redis_broker.middleware[:]  # Make a copy
+for m in middleware:
+    if m.__class__.__name__ == 'Prometheus':
+        redis_broker.middleware.remove(m)
+
+# redis_broker.middleware.clear()  # Remove ALL middlewares
+dramatiq.set_broker(redis_broker)
 
 
 class AggregationAsyncWorker(GenericAsyncWorker):
@@ -57,6 +86,11 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             elif config.aggregate_on == AggregateOn.multi_project:
                 self._multi_project_types.add(config.project_type)
             self._task_types.add(config.project_type)
+
+        self._handle_event_actor = dramatiq.actor(
+            queue_name=AGGREGATION_QUEUE_NAME,
+            actor_name='handleEvent',
+        )(self.handle_event)
 
     def _gen_single_type_project_id(self, task_type, epoch):
         """
@@ -253,82 +287,47 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             )
         await self._redis_conn.close()
 
-    async def _on_rabbitmq_message(self, message: IncomingMessage):
+    def handle_event(self, *args):
         """
-        Handle incoming RabbitMQ messages.
-
-        This method processes incoming messages, validates their structure,
-        and initiates the appropriate task processing.
-
-        Args:
-            message (IncomingMessage): The incoming RabbitMQ message.
-
-        Returns:
-            None
+        Handle an event.
         """
-        task_type = message.routing_key.split('.')[-1]
-        if task_type not in self._task_types:
-            return
-        await message.ack()
-
-        await self.init_worker()
-
-        self._logger.debug('task type: {}', task_type)
-        # Process message based on task type
-        if task_type in self._single_project_types:
-            try:
-                msg_obj: PowerloomSnapshotSubmittedMessage = PowerloomSnapshotSubmittedMessage.parse_raw(message.body)
-            except ValidationError as e:
-                self._logger.opt(exception=settings.logs.debug_mode).error(
-                    (
-                        'Bad message structure of callback processor. Error: {}'
-                    ),
-                    e,
-                )
-                return
-            except Exception as e:
-                self._logger.opt(exception=settings.logs.debug_mode).error(
-                    (
-                        'Unexpected message structure of callback in processor. Error: {}'
-                    ),
-                    e,
-                )
-                return
+        self._logger.debug('Handling event: {}', args)
+        event_type = args[0]
+        event_data = args[1]
+        try:
+            if event_type in self._single_project_types:
+                msg_obj: PowerloomSnapshotSubmittedMessage = PowerloomSnapshotSubmittedMessage.parse_raw(event_data)
+            elif event_type in self._multi_project_types:
+                msg_obj: PowerloomCalculateAggregateMessage = PowerloomCalculateAggregateMessage.parse_raw(event_data)
             else:
-                if msg_obj.epochId == 0:
-                    self._logger.debug('Skipping aggregation snapshot for epoch 0. Incoming msg: {}', msg_obj)
-                    return
-        elif task_type in self._multi_project_types:
-            try:
-                msg_obj: PowerloomCalculateAggregateMessage = (
-                    PowerloomCalculateAggregateMessage.parse_raw(message.body)
-                )
-            except ValidationError as e:
-                self._logger.opt(exception=settings.logs.debug_mode).error(
-                    (
-                        'Bad message structure of callback processor. Error: {}'
-                    ),
-                    e,
-                )
+                self._logger.error('Unknown event type: {}', event_type)
                 return
-            except Exception as e:
-                self._logger.opt(exception=settings.logs.debug_mode).error(
-                    (
-                        'Unexpected message structure of callback in processor. Error: {}'
-                    ),
-                    e,
-                )
-                return
-            else:
-                if msg_obj.epochId == 0:
-                    self._logger.debug('Skipping aggregation snapshot for epoch 0. Incoming msg: {}', msg_obj)
-                    return
-        else:
-            self._logger.error(
-                'Unknown task type {}', task_type,
+        except ValidationError as e:
+            self._logger.opt(exception=settings.logs.debug_mode).error(
+                (
+                    'Bad message structure of callback processor. Error: {}, {}'
+                ),
+                e, event_data,
             )
             return
-        await self._create_tracked_task(self._process_task(msg_obj=msg_obj, task_type=task_type))
+        except Exception as e:
+            self._logger.opt(exception=settings.logs.debug_mode).error(
+                (
+                    'Unexpected message structure of callback in processor. Error: {}'
+                ),
+                e,
+            )
+            return
+        else:
+            if msg_obj.epochId == 0:
+                self._logger.debug('Skipping aggregation snapshot for epoch 0. Incoming msg: {}', msg_obj)
+                return
+
+        future = asyncio.run_coroutine_threadsafe(
+            self._create_tracked_task(self._process_task(msg_obj=msg_obj, task_type=event_type)),
+            self._event_loop,
+        )
+        future.result()
 
     async def _init_project_calculation_mapping(self):
         """
@@ -367,6 +366,45 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         if not self._initialized:
             await self._init_project_calculation_mapping()
             await self.init()
+
+    def run(self) -> None:
+        """
+        Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
+        running the event loop until it is stopped.
+        """
+        self._logger = logger
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(
+            resource.RLIMIT_NOFILE,
+            (settings.rlimit.file_descriptors, hard),
+        )
+        for signame in [SIGINT, SIGTERM, SIGQUIT]:
+            signal(signame, self._signal_handler)
+
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+        ev_loop = asyncio.get_event_loop()
+        self._event_loop = ev_loop
+
+        # Update the middleware to use this event loop
+        for middleware in redis_broker.middleware:
+            if isinstance(middleware, dramatiq.middleware.AsyncIO):
+                middleware.event_loop = ev_loop
+
+        self._logger.debug(
+            f'Starting asynchronous callback worker {self._unique_id}...',
+        )
+
+        self._event_loop.run_until_complete(self.init_worker())
+
+        # Start a Dramatiq worker in a separate thread
+        worker = Worker(redis_broker, queues=[AGGREGATION_QUEUE_NAME])
+        worker_thread = threading.Thread(target=worker.start, daemon=True)
+        worker_thread.start()
+        try:
+            ev_loop.run_forever()
+        finally:
+            ev_loop.close()
 
 
 if __name__ == '__main__':

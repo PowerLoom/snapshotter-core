@@ -14,6 +14,7 @@ from typing import Set
 from typing import Union
 from uuid import uuid4
 
+import dramatiq
 import grpclib
 import httpx
 import sha3
@@ -22,6 +23,8 @@ from aio_pika import IncomingMessage
 from aio_pika import Message
 from aio_pika.pool import Pool
 from coincurve import PrivateKey
+from dramatiq.brokers.redis import RedisBroker
+from dramatiq.middleware import AsyncIO
 from eip712_structs import EIP712Struct
 from eip712_structs import make_domain
 from eip712_structs import String
@@ -67,8 +70,21 @@ from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 from snapshotter.utils.redis.redis_keys import submitted_unfinalized_snapshot_cids
 from snapshotter.utils.rpc import RpcHelper
 
-
 logger = default_logger.bind(module='GenericWorker')
+
+# Configure Redis broker with no middleware
+redis_broker = RedisBroker(host=settings.redis.host, port=settings.redis.port)
+redis_broker.add_middleware(AsyncIO())
+
+# Remove Prometheus middleware to avoid errors
+middleware = redis_broker.middleware[:]  # Make a copy
+for m in middleware:
+    if m.__class__.__name__ == 'Prometheus':
+        redis_broker.middleware.remove(m)
+
+# redis_broker.middleware.clear()  # Remove ALL middlewares
+dramatiq.set_broker(redis_broker)
+EVENT_DETECTOR_QUEUE_NAME = f'powerloom-event-detector_{settings.namespace}_{settings.instance_id}'
 
 
 class EIPRequest(EIP712Struct):
@@ -154,8 +170,6 @@ class GenericAsyncWorker(multiprocessing.Process):
             name (str): The name of the worker.
             **kwargs: Additional keyword arguments to pass to the superclass constructor.
         """
-        self._core_rmq_consumer: asyncio.Task
-        self._exchange_name = f'{settings.rabbitmq.setup.callbacks.exchange}:{settings.namespace}'
         self._unique_id = f'{name}-' + keccak(text=str(uuid4())).hex()[:8]
         self._running_callback_tasks: Dict[str, asyncio.Task] = dict()
         super(GenericAsyncWorker, self).__init__(name=name, **kwargs)
@@ -164,14 +178,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         self._rate_limiting_lua_scripts = None
 
         self.protocol_state_contract_address = Web3.to_checksum_address(settings.protocol_state.address)
-        self._commit_payload_exchange = (
-            f'{settings.rabbitmq.setup.commit_payload.exchange}:{settings.namespace}'
-        )
-        self._event_detector_exchange = f'{settings.rabbitmq.setup.event_detector.exchange}:{settings.namespace}'
-        self._event_detector_routing_key_prefix = f'powerloom-event-detector:{settings.namespace}:{settings.instance_id}.'
-        self._commit_payload_routing_key = (
-            f'powerloom-backend-commit-payload:{settings.namespace}:{settings.instance_id}.Data'
-        )
+
         self._keccak_hash = lambda x: sha3.keccak_256(x).digest()
         self._private_key = settings.signer_private_key
         if self._private_key.startswith('0x'):
@@ -185,6 +192,7 @@ class GenericAsyncWorker(multiprocessing.Process):
 
         self._last_stream_close_time = 0
         self._stream_lifetime = 30  # Close stream every 30 seconds
+        self._event_loop = None
 
     def _signal_handler(self, signum, frame):
         """
@@ -334,34 +342,17 @@ class GenericAsyncWorker(multiprocessing.Process):
                 projectId=project_id,
                 timestamp=int(time.time()),
             )
-            try:
-                async with self._rmq_connection_pool.acquire() as connection:
-                    async with self._rmq_channel_pool.acquire() as channel:
-                        # Prepare a message to send
-                        commit_payload_exchange = await channel.get_exchange(
-                            name=self._event_detector_exchange,
-                        )
-                        message_data = snapshot_submitted_message.json().encode()
+            # Send message to event detector queue
 
-                        # Prepare a message to send
-                        message = Message(message_data)
-
-                        await commit_payload_exchange.publish(
-                            message=message,
-                            routing_key=self._event_detector_routing_key_prefix + 'SnapshotSubmitted',
-                        )
-
-                        self._logger.debug(
-                            'Sent snapshot submitted message to event detector queue | '
-                            'Project: {} | Epoch: {} | Snapshot CID: {}',
-                            project_id, epoch.epochId, snapshot_cid,
-                        )
-
-            except Exception as e:
-                self._logger.opt(exception=settings.logs.debug_mode).error(
-                    'Exception sending snapshot submitted message to event detector queue: {} | Project: {} | Epoch: {} | Snapshot CID: {}',
-                    e, project_id, epoch.epochId, snapshot_cid,
-                )
+            dramatiq.broker.get_broker().enqueue(
+                dramatiq.Message(
+                    queue_name=EVENT_DETECTOR_QUEUE_NAME,
+                    actor_name='handleEvent',  # Match actor name with event_receiver.py
+                    args=('SnapshotSubmitted', snapshot_submitted_message.json()),
+                    kwargs={},
+                    options={},
+                ),
+            )
 
             try:
                 # Remove old unfinalized snapshots
@@ -401,45 +392,6 @@ class GenericAsyncWorker(multiprocessing.Process):
                         ).json(),
                     },
                 )
-
-    async def _rabbitmq_consumer(self, loop):
-        """
-        Consume messages from a RabbitMQ queue.
-
-        Args:
-            loop (asyncio.AbstractEventLoop): The event loop to use for the consumer.
-
-        Returns:
-            None
-        """
-        self._rmq_connection_pool = Pool(get_rabbitmq_robust_connection_async, max_size=5, loop=loop)
-        self._rmq_channel_pool = Pool(
-            partial(get_rabbitmq_channel, self._rmq_connection_pool), max_size=20,
-            loop=loop,
-        )
-        async with self._rmq_channel_pool.acquire() as channel:
-            await channel.set_qos(self._qos)
-            exchange = await channel.get_exchange(
-                name=self._exchange_name,
-            )
-            q_obj = await channel.get_queue(
-                name=self._q,
-                ensure=False,
-            )
-            self._logger.debug(
-                f'Consuming queue {self._q} with routing key {self._rmq_routing}...',
-            )
-            await q_obj.bind(exchange, routing_key=self._rmq_routing)
-            await q_obj.consume(self._on_rabbitmq_message)
-
-    async def _on_rabbitmq_message(self, message: IncomingMessage):
-        """
-        Callback function that is called when a message is received from RabbitMQ.
-
-        Args:
-            message (IncomingMessage): The incoming message from RabbitMQ.
-        """
-        pass
 
     async def _init_redis_pool(self):
         """
@@ -581,7 +533,10 @@ class GenericAsyncWorker(multiprocessing.Process):
             'Snapshot submission creation with request: {}', request_msg,
         )
 
-        msg = SnapshotSubmission(request=request_msg, signature=signature.hex(), header=current_block_hash, dataMarket=settings.data_market)
+        msg = SnapshotSubmission(
+            request=request_msg, signature=signature.hex(),
+            header=current_block_hash, dataMarket=settings.data_market,
+        )
         self._logger.info(
             'Snapshot submission created: {}', msg,
         )
@@ -711,31 +666,6 @@ class GenericAsyncWorker(multiprocessing.Process):
             asyncio.create_task(self._cleanup_tasks())
 
         self._initialized = True
-
-    def run(self) -> None:
-        """
-        Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
-        running the event loop until it is stopped.
-        """
-        self._logger = logger
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        resource.setrlimit(
-            resource.RLIMIT_NOFILE,
-            (settings.rlimit.file_descriptors, hard),
-        )
-        for signame in [SIGINT, SIGTERM, SIGQUIT]:
-            signal(signame, self._signal_handler)
-        ev_loop = asyncio.get_event_loop()
-        self._logger.debug(
-            f'Starting asynchronous callback worker {self._unique_id}...',
-        )
-        self._core_rmq_consumer = asyncio.ensure_future(
-            self._rabbitmq_consumer(ev_loop),
-        )
-        try:
-            ev_loop.run_forever()
-        finally:
-            ev_loop.close()
 
     async def _cleanup_tasks(self):
         """

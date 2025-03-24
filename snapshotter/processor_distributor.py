@@ -77,7 +77,9 @@ for m in middleware:
 # redis_broker.middleware.clear()  # Remove ALL middlewares
 dramatiq.set_broker(redis_broker)
 
-CONSUME_QUEUE_NAME = f'powerloom-event-detector_{settings.namespace}_{settings.instance_id}'
+EVENT_DETECTOR_QUEUE_NAME = f'powerloom-event-detector_{settings.namespace}_{settings.instance_id}'
+SNAPSHOT_QUEUE_NAME = f'powerloom-snapshotter_{settings.namespace}_{settings.instance_id}'
+AGGREGATION_QUEUE_NAME = f'powerloom-aggregator_{settings.namespace}_{settings.instance_id}'
 
 
 class ProcessorDistributor(multiprocessing.Process):
@@ -178,7 +180,7 @@ class ProcessorDistributor(multiprocessing.Process):
         self._task_cleanup_interval = settings.async_task_config.task_cleanup_interval
 
         self._handle_event_actor = dramatiq.actor(
-            queue_name=CONSUME_QUEUE_NAME,
+            queue_name=EVENT_DETECTOR_QUEUE_NAME,
             actor_name='handleEvent',
         )(self.handle_event)
 
@@ -540,13 +542,15 @@ class ProcessorDistributor(multiprocessing.Process):
                     bulk_mode=True,
                 )
 
-                msg_body = Message(process_unit.json().encode('utf-8'))
-                await exchange.publish(
-                    routing_key=f'powerloom-backend-callback:{settings.namespace}'
-                    f':{settings.instance_id}:EpochReleased.{project_type}',
-                    message=msg_body,
+                dramatiq.broker.get_broker().enqueue(
+                    dramatiq.Message(
+                        queue_name=SNAPSHOT_QUEUE_NAME,
+                        actor_name='handleEvent',  # Match actor name with event_receiver.py
+                        args=(project_type, process_unit.json()),
+                        kwargs={},
+                        options={},
+                    ),
                 )
-
                 self._logger.info(
                     'Sent out message to be processed by worker'
                     f' {project_type} : {process_unit}',
@@ -562,10 +566,14 @@ class ProcessorDistributor(multiprocessing.Process):
                 )
 
                 msg_body = Message(process_unit.json().encode('utf-8'))
-                await exchange.publish(
-                    routing_key=f'powerloom-backend-callback:{settings.namespace}'
-                    f':{settings.instance_id}:EpochReleased.{project_type}',
-                    message=msg_body,
+                dramatiq.broker.get_broker().enqueue(
+                    dramatiq.Message(
+                        queue_name=SNAPSHOT_QUEUE_NAME,
+                        actor_name='handleEvent',  # Match actor name with event_receiver.py
+                        args=(project_type, process_unit.json()),
+                        kwargs={},
+                        options={},
+                    ),
                 )
                 self._logger.info(
                     'Sent out message to be processed by worker'
@@ -591,12 +599,13 @@ class ProcessorDistributor(multiprocessing.Process):
                     primary_data_source=primary_data_source,
                 )
 
-                msg_body = Message(process_unit.json().encode('utf-8'))
-                queuing_tasks.append(
-                    exchange.publish(
-                        routing_key=f'powerloom-backend-callback:{settings.namespace}'
-                        f':{settings.instance_id}:EpochReleased.{project_type}',
-                        message=msg_body,
+                dramatiq.broker.get_broker().enqueue(
+                    dramatiq.Message(
+                        queue_name=SNAPSHOT_QUEUE_NAME,
+                        actor_name='handleEvent',  # Match actor name with event_receiver.py
+                        args=(project_type, process_unit.json()),
+                        kwargs={},
+                        options={},
                     ),
                 )
 
@@ -774,11 +783,13 @@ class ProcessorDistributor(multiprocessing.Process):
                         self._logger.trace(f'projectId mismatch {process_unit.projectId} {config.base_project_type}')
                         continue
 
-                    rabbitmq_publish_tasks.append(
-                        exchange.publish(
-                            routing_key=f'powerloom-backend-callback:{settings.namespace}:'
-                            f'{settings.instance_id}:CalculateAggregate.{task_type}',
-                            message=Message(process_unit.json().encode('utf-8')),
+                    dramatiq.broker.get_broker().enqueue(
+                        dramatiq.Message(
+                            queue_name=AGGREGATION_QUEUE_NAME,
+                            actor_name='handleEvent',  # Match actor name with event_receiver.py
+                            args=(task_type, process_unit.json()),
+                            kwargs={},
+                            options={},
                         ),
                     )
                 elif config.aggregate_on == AggregateOn.multi_project:
@@ -830,11 +841,13 @@ class ProcessorDistributor(multiprocessing.Process):
                             timestamp=int(time.time()),
                         )
 
-                        rabbitmq_publish_tasks.append(
-                            exchange.publish(
-                                routing_key=f'powerloom-backend-callback:{settings.namespace}'
-                                f':{settings.instance_id}:CalculateAggregate.{task_type}',
-                                message=Message(final_msg.json().encode('utf-8')),
+                        dramatiq.broker.get_broker().enqueue(
+                            dramatiq.Message(
+                                queue_name=AGGREGATION_QUEUE_NAME,
+                                actor_name='handleEvent',  # Match actor name with event_receiver.py
+                                args=(task_type, final_msg.json()),
+                                kwargs={},
+                                options={},
                             ),
                         )
 
@@ -938,9 +951,6 @@ class ProcessorDistributor(multiprocessing.Process):
         try:
             event_type = args[0]
             event_data = args[1]
-            if not ProcessorDistributor._event_loop:
-                self._logger.error('Event loop not initialized')
-                return None
 
             # Run the async process_event in the event loop
             future = asyncio.run_coroutine_threadsafe(
@@ -996,7 +1006,7 @@ class ProcessorDistributor(multiprocessing.Process):
         ev_loop.run_until_complete(self.init_worker())
 
         # Start a Dramatiq worker in a separate thread
-        worker = Worker(redis_broker, queues=[CONSUME_QUEUE_NAME])
+        worker = Worker(redis_broker, queues=[EVENT_DETECTOR_QUEUE_NAME])
         worker_thread = threading.Thread(target=worker.start, daemon=True)
         worker_thread.start()
 
