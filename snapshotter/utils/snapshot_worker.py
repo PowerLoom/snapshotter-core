@@ -12,7 +12,6 @@ from typing import Optional
 
 import dramatiq
 import uvloop
-from aio_pika import IncomingMessage
 from dramatiq.brokers.redis import RedisBroker
 from dramatiq.middleware import AsyncIO
 from dramatiq.worker import Worker
@@ -451,7 +450,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
 
     def run(self) -> None:
         """
-        Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
+        Runs the worker by setting resource limits, registering signal handlers, starting the Dramatiq worker, and
         running the event loop until it is stopped.
         """
         self._logger = logger

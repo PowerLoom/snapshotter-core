@@ -1,12 +1,9 @@
 import asyncio
 import json
 import multiprocessing
-import resource
 import time
 from contextlib import asynccontextmanager
-from functools import partial
 from signal import SIGINT
-from signal import signal
 from signal import SIGQUIT
 from signal import SIGTERM
 from typing import Dict
@@ -16,12 +13,8 @@ from uuid import uuid4
 
 import dramatiq
 import grpclib
-import httpx
 import sha3
 import tenacity
-from aio_pika import IncomingMessage
-from aio_pika import Message
-from aio_pika.pool import Pool
 from coincurve import PrivateKey
 from dramatiq.brokers.redis import RedisBroker
 from dramatiq.middleware import AsyncIO
@@ -47,8 +40,6 @@ from tenacity import wait_random_exponential
 from web3 import Web3
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.callback_helpers import get_rabbitmq_channel
-from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
@@ -196,14 +187,15 @@ class GenericAsyncWorker(multiprocessing.Process):
 
     def _signal_handler(self, signum, frame):
         """
-        Signal handler function that cancels the core RMQ consumer when a SIGINT, SIGTERM or SIGQUIT signal is received.
+        Signal handler function that handles shutdown when a SIGINT, SIGTERM or SIGQUIT signal is received.
 
         Args:
             signum (int): The signal number.
             frame (frame): The current stack frame at the time the signal was received.
         """
         if signum in [SIGINT, SIGTERM, SIGQUIT]:
-            self._core_rmq_consumer.cancel()
+            self._shutdown_initiated = True
+            self._logger.info('Shutdown initiated')
 
     @retry(
         wait=wait_random_exponential(multiplier=1, max=10),

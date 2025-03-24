@@ -12,8 +12,6 @@ fi
 # sleep for 30 seconds to allow other services to start
 sleep 30
 
-poetry run python -m snapshotter.init_rabbitmq
-
 echo 'starting processes...';
 pm2 start pm2.config.js
 

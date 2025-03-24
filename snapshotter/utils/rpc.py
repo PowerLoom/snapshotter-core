@@ -252,7 +252,7 @@ class RpcHelper(object):
         for node in nodes:
             try:
                 _total_workers = settings.callback_worker_config.num_aggregation_workers + \
-                    settings.callback_worker_config.num_snapshot_workers + settings.callback_worker_config.num_delegate_workers + 1
+                    settings.callback_worker_config.num_snapshot_workers + 1
                 if self._source_node:
                     # Adding 1 to account for processor distributor RPC usage
                     _total_workers += 1

@@ -6,14 +6,12 @@
 - [Increase IPFS memory limits (for complex use cases)](#increase-ipfs-memory-limits-for-complex-use-cases)
 - [State transitions and data composition](#state-transitions-and-data-composition)
   - [Epoch Generation](#epoch-generation)
-  - [Preloading](#preloading)
   - [Base Snapshot Generation](#base-snapshot-generation)
     - [Bulk Mode](#bulk-mode)
   - [Data source signaling](#data-source-signaling)
   - [Snapshot Finalization](#snapshot-finalization)
   - [Epoch processing state transitions](#epoch-processing-state-transitions)
     - [`EPOCH_RELEASED`](#epoch_released)
-    - [`PRELOAD`](#preload)
     - [`SNAPSHOT_BUILD`](#snapshot_build)
     - [`SNAPSHOT_SUBMIT_PAYLOAD_COMMIT`](#snapshot_submit_payload_commit)
     - [`RELAYER_SEND`](#relayer_send)
@@ -23,7 +21,6 @@
   - [System Event Detector](#system-event-detector)
   - [Process Hub Core](#process-hub-core)
   - [Processor Distributor](#processor-distributor)
-  - [Delegation Workers for preloaders](#delegation-workers-for-preloaders)
   - [Callback Workers](#callback-workers)
   - [RPC Helper](#rpc-helper)
   - [Core API](#core-api)
@@ -163,36 +160,6 @@ The size of an epoch is configurable. Let that be referred to as `size(E)`
  The `epochId` here is incremented by 1 with every successive epoch release.
 
 
- ### Preloading
-
-Preloaders perform an important function of fetching low-level data for eg. block details, and transaction receipts so that subsequent base snapshot building can proceed without performing unnecessary redundant calls that ultimately save on access costs on RPC and other queries on the underlying node infrastructure for the source data blockchain.
-
-Each project type within the project configuration as found in [`config/projects.json`](https://github.com/PowerLoom/snapshotter-configs/blob/f46cc86cd08913014decf7bced128433442c8f84/projects.example.json) can specify the preloaders that their base snapshot builds depend on. Once the dependent preloaders have completed their fetches, the [Processor Distributor](#processor-distributor) subsequently triggers the base snapshot builders for each project type.
-
-https://github.com/PowerLoom/pooler/blob/5e7cc3812074d91e8d7d85058554bb1175bf8070/config/projects.example.json#L2-L8
-
-The preloaders implement one of the following two generic interfaces
-
-* `GenericPreloader`
-
-https://github.com/PowerLoom/pooler/blob/5e7cc3812074d91e8d7d85058554bb1175bf8070/snapshotter/utils/callback_helpers.py#L109-L126
-
-* `GenericDelegatorPreloader`. Such preloaders are tasked with fetching large volumes of data and utilize [delegated workers](#delegation-workers-for-preloaders) to which they submit large workloads over a request queue and wait for the results to be returned over a response queue.
-
-https://github.com/PowerLoom/pooler/blob/5e7cc3812074d91e8d7d85058554bb1175bf8070/snapshotter/utils/callback_helpers.py#L129-L161
-
-
-The preloaders can be found in the [`snapshotter/utils/preloaders`](snapshotter/utils/preloaders/) directory. The preloaders that are available to project configuration entries are exposed through the [`config/preloader.json`](https://github.com/PowerLoom/snapshotter-configs/blob/f46cc86cd08913014decf7bced128433442c8f84/preloader.json) configuration.
-
-https://github.com/PowerLoom/pooler/blob/5e7cc3812074d91e8d7d85058554bb1175bf8070/config/preloader.json#L1-L27
-
-At the moment, we have 3 generic preloaders built into the snapshotter template.
-- [Block Details](snapshotter/utils/preloaders/block_details/preloader.py) - It prefetches and stores block details for blocks in each Epoch and stores it in Redis
-- [Eth Price](snapshotter/utils/preloaders/eth_price/preloader.py) - It prefetches and stores ETH price for blocks in each Epoch and stores it in redis
-- [Tx Receipts](snapshotter/utils/preloaders/tx_receipts/preloader.py) - It prefetches all transaction details present in each Epoch and stores the data in Redis. Since fetching all block transactions is a lot of work, it utilizes the [delegated workers](#delegation-workers-for-preloaders) architecture to parallelize and fetch data in a fast and reliable way
-
-More preloaders can be easily added depending on the use case user is snapshotting for. It is as simple as writing logic in `preloader.py`, adding the preloader config to `config/preloader.json`, and adding the preloader dependency in `config/projects.json`
-
  ### Base Snapshot Generation
 
  Workers, as mentioned in the configuration section for [`config/projects.json`](#configuration), calculate base snapshots against this `epochId` which corresponds to collections of state observations and event logs between the blocks at height in the range `[begin, end]`.
@@ -258,12 +225,6 @@ The following is a sequence of states that an epoch goes through from the point 
 The state name is self explanatory.
 
 
-#### `PRELOAD`
-
-For every [project type's preloader specifications](https://github.com/PowerLoom/pooler/blob/bcc245d228acce504ba803b9b50fd89c8eb05984/README.md#preloading), the status of all the preloading dependencies being satisfied is captured here:
-
-https://github.com/PowerLoom/pooler/blob/bcc245d228acce504ba803b9b50fd89c8eb05984/snapshotter/processor_distributor.py#L227-L251
-
 #### `SNAPSHOT_BUILD`
 
 The snapshot builders as configured in [`projects.json`](https://github.com/PowerLoom/pooler/blob/56c3dd71b5ec0abf58db3407ef3539f3457076f5/README.md#base-snapshot-generation) are executed. Also refer to the [case study of the current implementation of Pooler](https://github.com/PowerLoom/pooler/blob/56c3dd71b5ec0abf58db3407ef3539f3457076f5/README.md#1-pooler-case-study-and-extending-this-implementation) for a detailed look at snapshot building for base as well as aggregates.
@@ -327,39 +288,6 @@ The Processor Distributor, defined in [`processor_distributor.py`](snapshotter/p
     https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990a/snapshotter/processor_distributor.py#L928-L1042
 
 
-### Delegation Workers for preloaders
-
-The preloaders often fetch and cache large volumes of data, for eg, all the transaction receipts for a block on the data source blockchain. In such a case, a single worker will never be enough to feasibly fetch the data for a timely base snapshot generation and subsequent aggregate snapshot generations to finally reach a consensus.
-
-Hence such workers are defined as `delegate_tasks` in [`config/preloader.json`](https://github.com/PowerLoom/snapshotter-configs/blob/f46cc86cd08913014decf7bced128433442c8f84/preloader.json) and the [process hub core](#process-hub-core) launches a certain number of workers as defined in the primary settings file, `config/settings.json` under the key `callback_worker_config.num_delegate_workers`.
-
-https://github.com/PowerLoom/pooler/blob/5e7cc3812074d91e8d7d85058554bb1175bf8070/config/preloader.json#L19-L25
-
-https://github.com/PowerLoom/pooler/blob/5e7cc3812074d91e8d7d85058554bb1175bf8070/config/settings.example.json#L86-L90
-
-Delegation workers operate over a simple request-response queue architecture over RabbitMQ.
-
-https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990a/snapshotter/init_rabbitmq.py#L90-L111
-
-One of the preloaders bundled with this snapshotter peer is tasked with fetching all the transaction receipts within a given epoch's block range and because of the volume of data to be fetched it delegates this work to a bunch of delegation worker
-
-* The Preloader: [snapshotter/utils/preloaders/tx_receipts/preloader.py](snapshotter/utils/preloaders/tx_receipts/preloader.py).
-* The Delegation Workers: [snapshotter/utils/preloaders/tx_receipts/delegated_worker/tx_receipts.py](snapshotter/utils/preloaders/tx_receipts/delegated_worker/tx_receipts.py)
-
-As a common functionality shared by all preloaders that utilize delegate workers, this logic is present in the generic class `DelegatorPreloaderAsyncWorker` that all such preloaders inherit. Here you can observe the workload is sent to the delegation workers
-
-https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990a/snapshotter/utils/generic_delegator_preloader.py#L188-L227
-
-Upon sending out the workloads tagged by unique request IDs, the delegator sets up a temporary exclusive queue to which only the delegation workers meant for the task type push their responses.
-
-https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990a/snapshotter/utils/generic_delegator_preloader.py#L158-L186
-
-The corresponding response being pushed by the delegation workers can be found here in the generic class `DelegateAsyncWorker` that all such workers should inherit from:
-
-https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990a/snapshotter/utils/delegate_worker.py#L74-L84
-
-![Delegation worker dependent preloading architecture](snapshotter/static/docs/assets/DelegationPreloading.png)
-
 ### Callback Workers
 
 The callback workers are the ones that build the base snapshot and aggregation snapshots and as explained above, are launched by the [process hub core](#process-hub-core) according to the configurations in `aggregator/projects.json` and `config/aggregator.json`.
@@ -370,7 +298,7 @@ https://github.com/PowerLoom/pooler/blob/5e7cc3812074d91e8d7d85058554bb1175bf807
 
 https://github.com/PowerLoom/pooler/blob/d8b7be32ad329e8dcf0a7e5c1b27862894bc990a/snapshotter/init_rabbitmq.py#L182-L213
 
-Upon receiving a message from the processor distributor after preloading is complete, the workers do most of the heavy lifting along with some sanity checks and then call the `compute()` callback function on the project's configured snapshot worker class to transform the dependent data points as cached by the preloaders to finally generate the base snapshots.
+Upon receiving a message from the processor distributor, the workers do most of the heavy lifting along with some sanity checks and then call the `compute()` callback function on the project's configured snapshot worker class to transform the dependent data points as cached by the preloaders to finally generate the base snapshots.
 
 * [Base Snapshot builder](pooler/utils/snapshot_worker.py)
 * [Aggregation Snapshot builder](pooler/utils/aggregation_worker.py)
@@ -836,7 +764,6 @@ Snapshot builder: [snapshotter/modules/computes/bungee_bridge.py](https://github
       }
     },
 ```
-Its preloader dependency is [`block_transactions`](snapshotter/utils/preloaders/tx_receipts/preloader.py) as seen in the [preloader configuration](#preloading).
 
 The snapshot builder then goes through all preloaded block transactions, filters out, and then generates relevant snapshots for wallet address that received funds from the Bungee Bridge refuel contract during that epoch.
 

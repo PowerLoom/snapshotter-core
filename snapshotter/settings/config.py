@@ -49,19 +49,9 @@ with open(preloader_config_path) as preloader_config_file:
     preloader_config_dict = json.load(preloader_config_file)
 preloader_config = PreloaderConfig(**preloader_config_dict)
 preloaders = preloader_config.preloaders
-delegate_tasks = preloader_config.delegate_tasks
 
 # Sanity check: Ensure all preloader types are unique
 preloader_types = set()
 for preloader in preloaders:
     preloader_types.add(preloader.task_type)
 assert len(preloader_types) == len(preloaders), 'Duplicate preloader types found'
-
-# Sanity check: Ensure all delegate task types are unique
-delegate_task_types = set()
-for delegate_task in delegate_tasks:
-    delegate_task_types.add(delegate_task.task_type)
-assert len(delegate_task_types) == len(delegate_tasks), 'Duplicate delegate task types found'
-
-# Ensure no overlap between preloader types and delegate task types
-assert len(preloader_types & delegate_task_types) == 0, 'Overlap found between preloader and delegate task types'

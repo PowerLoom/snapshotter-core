@@ -9,7 +9,6 @@ from typing import Dict
 from typing import Union
 from urllib.parse import urljoin
 
-import aio_pika
 from httpx import AsyncClient
 from httpx import Client as SyncClient
 from ipfs_client.main import AsyncIPFSClient
@@ -30,52 +29,6 @@ from snapshotter.utils.rpc import RpcHelper
 
 # Setup logger for this module
 helper_logger = default_logger.bind(module='Callback|Helpers')
-
-
-async def get_rabbitmq_robust_connection_async():
-    """
-    Returns a robust connection to RabbitMQ server using the settings specified in the configuration file.
-
-    Returns:
-        aio_pika.Connection: A robust connection to RabbitMQ.
-    """
-    return await aio_pika.connect_robust(
-        host=settings.rabbitmq.host,
-        port=settings.rabbitmq.port,
-        virtual_host='/',
-        login=settings.rabbitmq.user,
-        password=settings.rabbitmq.password,
-    )
-
-
-async def get_rabbitmq_basic_connection_async():
-    """
-    Returns an async connection to RabbitMQ using the settings specified in the config file.
-
-    Returns:
-        aio_pika.Connection: An async connection to RabbitMQ.
-    """
-    return await aio_pika.connect(
-        host=settings.rabbitmq.host,
-        port=settings.rabbitmq.port,
-        virtual_host='/',
-        login=settings.rabbitmq.user,
-        password=settings.rabbitmq.password,
-    )
-
-
-async def get_rabbitmq_channel(connection_pool) -> aio_pika.Channel:
-    """
-    Acquires a connection from the connection pool and returns a channel object for RabbitMQ communication.
-
-    Args:
-        connection_pool (aio_pika.pool.Pool): An instance of the connection pool.
-
-    Returns:
-        aio_pika.Channel: An instance of the RabbitMQ channel.
-    """
-    async with connection_pool.acquire() as connection:
-        return await connection.channel()
 
 
 def misc_notification_callback_result_handler(fut: asyncio.Future):
@@ -294,88 +247,6 @@ class GenericPreloader(ABC):
     async def cleanup(self):
         """
         Abstract method to clean up resources.
-        """
-        pass
-
-
-class GenericDelegatorPreloader(GenericPreloader):
-    """
-    Abstract base class for delegator preloaders.
-    """
-    _epoch: EpochBase
-    _channel: aio_pika.abc.AbstractChannel
-    _exchange: aio_pika.abc.AbstractExchange
-    _q_obj: aio_pika.abc.AbstractQueue
-    _consumer_tag: str
-    _redis_conn: aioredis.Redis
-    _task_type: str
-    _epoch_id: int
-    _preload_successful_event: asyncio.Event
-    _awaited_delegated_response_ids: set
-    _collected_response_objects: Dict[int, Dict[str, Dict[Any, Any]]]
-    _request_id_query_obj_map: Dict[int, Any]
-
-    @abstractmethod
-    async def _on_delegated_responses_complete(self):
-        """
-        Abstract method called when all delegated responses are complete.
-        """
-        pass
-
-    @abstractmethod
-    async def _on_filter_worker_response_message(
-        self,
-        message: aio_pika.abc.AbstractIncomingMessage,
-    ):
-        """
-        Abstract method to handle filter worker response messages.
-
-        Args:
-            message (aio_pika.abc.AbstractIncomingMessage): The incoming message.
-        """
-        pass
-
-    @abstractmethod
-    async def _handle_filter_worker_response_message(self, message_body: bytes):
-        """
-        Abstract method to handle filter worker response message body.
-
-        Args:
-            message_body (bytes): The message body.
-        """
-        pass
-
-    @abstractmethod
-    async def _periodic_awaited_responses_checker(self):
-        """
-        Abstract method to periodically check for awaited responses.
-        """
-        pass
-
-
-class GenericDelegateProcessor(ABC):
-    """
-    Abstract base class for delegate processors.
-    """
-    __metaclass__ = ABCMeta
-
-    def __init__(self):
-        pass
-
-    @abstractmethod
-    async def compute(
-        self,
-        msg_obj: PowerloomDelegateWorkerRequestMessage,
-        redis_conn: aioredis.Redis,
-        rpc_helper: RpcHelper,
-    ):
-        """
-        Abstract method to compute delegate processing.
-
-        Args:
-            msg_obj (PowerloomDelegateWorkerRequestMessage): The delegate worker request message.
-            redis_conn (aioredis.Redis): Redis connection.
-            rpc_helper (RpcHelper): RPC helper instance.
         """
         pass
 

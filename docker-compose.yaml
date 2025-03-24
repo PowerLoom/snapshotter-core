@@ -49,8 +49,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
       snapshotter-local-collector:
         condition: service_started
     volumes:
@@ -159,24 +157,6 @@ services:
       - custom_network
     volumes:
       - ./redis_data:/data
-  rabbitmq:
-    image: rabbitmq:3-management
-    #command: ["daemon"]
-    expose:
-      - 15672
-      - 5672
-    ports:
-      - 5672:5672
-      - 15672:15672
-    healthcheck:
-      test: rabbitmq-diagnostics check_port_connectivity
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    restart: on-failure
-    networks:
-      - custom_network
 networks:
   custom_network:
     name: ${DOCKER_NETWORK_NAME}

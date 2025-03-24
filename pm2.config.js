@@ -50,8 +50,6 @@ const appConfigs = [
     cron_restart: '0 0 * * *', // Every day at 3 AM
   }),
   createAppConfig("system-event-detector", "snapshotter.system_event_detector"),
-  createWorkerConfig("delegate-worker", "snapshotter.utils.delegate_worker",
-    callback_worker_config.num_delegate_workers, '0 */6 * * *'),
   createWorkerConfig("snapshot-worker", "snapshotter.utils.snapshot_worker",
     callback_worker_config.num_snapshot_workers, '0 */6 * * *'),
   createWorkerConfig("aggregation-worker", "snapshotter.utils.aggregation_worker",

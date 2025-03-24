@@ -13,7 +13,6 @@ from typing import Union
 
 import dramatiq
 import uvloop
-from aio_pika import IncomingMessage
 from dramatiq.brokers.redis import RedisBroker
 from dramatiq.middleware import AsyncIO
 from dramatiq.worker import Worker
@@ -69,9 +68,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
             name (str): The name of the worker.
             **kwargs: Additional keyword arguments to be passed to the parent class constructor.
         """
-        self._q = f'powerloom-backend-cb-aggregate:{settings.namespace}:{settings.instance_id}'
-        self._rmq_routing = f'powerloom-backend-callback:{settings.namespace}'
-        f':{settings.instance_id}:CalculateAggregate.*'
         super(AggregationAsyncWorker, self).__init__(name=name, **kwargs)
 
         self._project_calculation_mapping = None
@@ -369,7 +365,7 @@ class AggregationAsyncWorker(GenericAsyncWorker):
 
     def run(self) -> None:
         """
-        Runs the worker by setting resource limits, registering signal handlers, starting the RabbitMQ consumer, and
+        Runs the worker by setting resource limits, registering signal handlers, starting the Dramatiq worker, and
         running the event loop until it is stopped.
         """
         self._logger = logger

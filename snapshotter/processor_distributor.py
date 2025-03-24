@@ -8,7 +8,6 @@ import threading
 import time
 from collections import defaultdict
 from functools import lru_cache
-from functools import partial
 from signal import SIGINT
 from signal import signal
 from signal import SIGQUIT
@@ -21,9 +20,6 @@ from uuid import uuid4
 
 import dramatiq
 import uvloop
-from aio_pika import IncomingMessage
-from aio_pika import Message
-from aio_pika.pool import Pool
 from dramatiq.brokers.redis import RedisBroker
 from dramatiq.middleware import AsyncIO
 from dramatiq.worker import Worker
@@ -41,8 +37,6 @@ from snapshotter.settings.config import aggregator_config
 from snapshotter.settings.config import preloaders
 from snapshotter.settings.config import projects_config
 from snapshotter.settings.config import settings
-from snapshotter.utils.callback_helpers import get_rabbitmq_channel
-from snapshotter.utils.callback_helpers import get_rabbitmq_robust_connection_async
 from snapshotter.utils.data_utils import get_source_chain_epoch_size
 from snapshotter.utils.data_utils import get_source_chain_id
 from snapshotter.utils.default_logger import default_logger
@@ -87,7 +81,7 @@ class ProcessorDistributor(multiprocessing.Process):
     A class responsible for distributing processing tasks and managing the snapshot lifecycle.
 
     This class handles epoch releases, project updates, snapshot submissions, and aggregations.
-    It interacts with RabbitMQ for message passing and Redis for state management.
+    It interacts with Dramatiq for message passing and Redis for state management.
     """
 
     _aioredis_pool: RedisPoolCache
@@ -116,7 +110,6 @@ class ProcessorDistributor(multiprocessing.Process):
         Attributes:
             _unique_id (str): The unique ID of the ProcessorDistributor.
             _q (queue.Queue): The queue used for processing tasks.
-            _rabbitmq_interactor: The RabbitMQ interactor object.
             _shutdown_initiated (bool): Flag indicating if shutdown has been initiated.
             _rpc_helper: The RPC helper object.
             _source_chain_id: The source chain ID.
@@ -139,19 +132,9 @@ class ProcessorDistributor(multiprocessing.Process):
             module=f'Callbacks|ProcessDistributor:{settings.namespace}-{settings.instance_id}',
         )
         self._q = queue.Queue()
-        self._rabbitmq_interactor = None
         self._shutdown_initiated = False
 
         self._initialized = False
-        self._callback_exchange_name = (
-            f'{settings.rabbitmq.setup.callbacks.exchange}:{settings.namespace}'
-        )
-        self._payload_commit_exchange_name = (
-            f'{settings.rabbitmq.setup.commit_payload.exchange}:{settings.namespace}'
-        )
-        self._payload_commit_routing_key = (
-            f'powerloom-backend-commit-payload:{settings.namespace}:{settings.instance_id}.Finalized'
-        )
 
         self._upcoming_project_changes = defaultdict(list)
         self._preload_completion_conditions: Dict[int, Dict] = defaultdict(
@@ -186,14 +169,15 @@ class ProcessorDistributor(multiprocessing.Process):
 
     def _signal_handler(self, signum, frame):
         """
-        Signal handler method that cancels the core RMQ consumer when a SIGINT, SIGTERM, or SIGQUIT signal is received.
+        Signal handler method that handles shutdown when a SIGINT, SIGTERM, or SIGQUIT signal is received.
 
         Args:
             signum (int): The signal number.
             frame (frame): The current stack frame at the time the signal was received.
         """
         if signum in [SIGINT, SIGTERM, SIGQUIT]:
-            self._core_rmq_consumer.cancel()
+            self._shutdown_initiated = True
+            self._logger.info('Shutdown initiated')
 
     async def _init_redis_pool(self):
         """
@@ -211,25 +195,6 @@ class ProcessorDistributor(multiprocessing.Process):
         await self._rpc_helper.init()
         self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
         await self._anchor_rpc_helper.init()
-
-    async def _init_rabbitmq_connection(self):
-        """
-        Initializes the RabbitMQ connection pool and channel pool.
-
-        The RabbitMQ connection pool is used to manage a pool of connections to the RabbitMQ server,
-        while the channel pool is used to manage a pool of channels for each connection.
-
-        Returns:
-            None
-        """
-        self._rmq_connection_pool = Pool(
-            get_rabbitmq_robust_connection_async,
-            max_size=20, loop=asyncio.get_event_loop(),
-        )
-        self._rmq_channel_pool = Pool(
-            partial(get_rabbitmq_channel, self._rmq_connection_pool), max_size=100,
-            loop=asyncio.get_event_loop(),
-        )
 
     async def _init_httpx_client(self):
         """
@@ -324,7 +289,7 @@ class ProcessorDistributor(multiprocessing.Process):
     async def init_worker(self):
         """
         Initializes the worker by initializing the Redis pool, RPC helper, loading project metadata,
-        initializing the RabbitMQ connection, and initializing the preloader compute mapping.
+        initializing the preloader compute mapping.
         """
         if not self._initialized:
             await self._init_redis_pool()
@@ -333,8 +298,6 @@ class ProcessorDistributor(multiprocessing.Process):
             self._logger.debug('Initialized httpx client in Processor Distributor init_worker')
             await self._init_rpc_helper()
             self._logger.debug('Initialized RPC helper in Processor Distributor init_worker')
-            await self._init_rabbitmq_connection()
-            self._logger.debug('Initialized RabbitMQ connection in Processor Distributor init_worker')
             await self._init_preloader_compute_mapping()
             self._logger.debug('Initialized preloader compute mapping in Processor Distributor init_worker')
             await self._init_protocol_meta()
@@ -525,101 +488,95 @@ class ProcessorDistributor(multiprocessing.Process):
         # Send to snapshotters to get the balances of the addresses
         queuing_tasks = []
 
-        async with self._rmq_channel_pool.acquire() as ch:
-            # Prepare a message to send
-            exchange = await ch.get_exchange(
-                name=self._callback_exchange_name,
+        project_config = self._project_type_config_mapping[project_type]
+
+        # Handling bulk mode projects
+        if project_config.bulk_mode:
+            process_unit = PowerloomSnapshotProcessMessage(
+                begin=epoch.begin,
+                end=epoch.end,
+                epochId=epoch.epochId,
+                bulk_mode=True,
             )
 
-            project_config = self._project_type_config_mapping[project_type]
-
-            # Handling bulk mode projects
-            if project_config.bulk_mode:
-                process_unit = PowerloomSnapshotProcessMessage(
-                    begin=epoch.begin,
-                    end=epoch.end,
-                    epochId=epoch.epochId,
-                    bulk_mode=True,
-                )
-
-                dramatiq.broker.get_broker().enqueue(
-                    dramatiq.Message(
-                        queue_name=SNAPSHOT_QUEUE_NAME,
-                        actor_name='handleEvent',  # Match actor name with event_receiver.py
-                        args=(project_type, process_unit.json()),
-                        kwargs={},
-                        options={},
-                    ),
-                )
-                self._logger.info(
-                    'Sent out message to be processed by worker'
-                    f' {project_type} : {process_unit}',
-                )
-                return
-            # Handling projects with no data sources
-            if project_config.projects is None:
-                project_id = f'{project_type}:{settings.namespace}'
-                process_unit = PowerloomSnapshotProcessMessage(
-                    begin=epoch.begin,
-                    end=epoch.end,
-                    epochId=epoch.epochId,
-                )
-
-                msg_body = Message(process_unit.json().encode('utf-8'))
-                dramatiq.broker.get_broker().enqueue(
-                    dramatiq.Message(
-                        queue_name=SNAPSHOT_QUEUE_NAME,
-                        actor_name='handleEvent',  # Match actor name with event_receiver.py
-                        args=(project_type, process_unit.json()),
-                        kwargs={},
-                        options={},
-                    ),
-                )
-                self._logger.info(
-                    'Sent out message to be processed by worker'
-                    f' {project_type} : {process_unit}',
-                )
-                return
-            static_source_project_ids = list()
-            # Handling projects with data sources
-            for project in project_config.projects:
-                project_id = f'{project_type}:{project}:{settings.namespace}'
-                static_source_project_ids.append(project_id)
-                data_sources = project.split('_')
-                if len(data_sources) == 1:
-                    data_source = data_sources[0]
-                    primary_data_source = None
-                else:
-                    primary_data_source, data_source = data_sources
-                process_unit = PowerloomSnapshotProcessMessage(
-                    begin=epoch.begin,
-                    end=epoch.end,
-                    epochId=epoch.epochId,
-                    data_source=data_source,
-                    primary_data_source=primary_data_source,
-                )
-
-                dramatiq.broker.get_broker().enqueue(
-                    dramatiq.Message(
-                        queue_name=SNAPSHOT_QUEUE_NAME,
-                        actor_name='handleEvent',  # Match actor name with event_receiver.py
-                        args=(project_type, process_unit.json()),
-                        kwargs={},
-                        options={},
-                    ),
-                )
-
-            results = await asyncio.gather(*queuing_tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, Exception):
-                    self._logger.error(
-                        'Error while sending message to queue. Error - {}',
-                        result,
-                    )
+            dramatiq.broker.get_broker().enqueue(
+                dramatiq.Message(
+                    queue_name=SNAPSHOT_QUEUE_NAME,
+                    actor_name='handleEvent',  # Match actor name with event_receiver.py
+                    args=(project_type, process_unit.json()),
+                    kwargs={},
+                    options={},
+                ),
+            )
             self._logger.info(
-                f'Sent out {len(project_config.projects)} messages to be processed by snapshot builder worker'
-                f' for epoch {epoch.epochId}',
+                'Sent out message to be processed by worker'
+                f' {project_type} : {process_unit}',
             )
+            return
+        # Handling projects with no data sources
+        if project_config.projects is None:
+            project_id = f'{project_type}:{settings.namespace}'
+            process_unit = PowerloomSnapshotProcessMessage(
+                begin=epoch.begin,
+                end=epoch.end,
+                epochId=epoch.epochId,
+            )
+
+            dramatiq.broker.get_broker().enqueue(
+                dramatiq.Message(
+                    queue_name=SNAPSHOT_QUEUE_NAME,
+                    actor_name='handleEvent',  # Match actor name with event_receiver.py
+                    args=(project_type, process_unit.json()),
+                    kwargs={},
+                    options={},
+                ),
+            )
+            self._logger.info(
+                'Sent out message to be processed by worker'
+                f' {project_type} : {process_unit}',
+            )
+            return
+        static_source_project_ids = list()
+        # Handling projects with data sources
+        for project in project_config.projects:
+            project_id = f'{project_type}:{project}:{settings.namespace}'
+            static_source_project_ids.append(project_id)
+            data_sources = project.split('_')
+            if len(data_sources) == 1:
+                data_source = data_sources[0]
+                primary_data_source = None
+            else:
+                primary_data_source, data_source = data_sources
+
+            process_unit = PowerloomSnapshotProcessMessage(
+                begin=epoch.begin,
+                end=epoch.end,
+                epochId=epoch.epochId,
+                data_source=data_source,
+                primary_data_source=primary_data_source,
+            )
+
+            dramatiq.broker.get_broker().enqueue(
+                dramatiq.Message(
+                    queue_name=SNAPSHOT_QUEUE_NAME,
+                    actor_name='handleEvent',  # Match actor name with event_receiver.py
+                    args=(project_type, process_unit.json()),
+                    kwargs={},
+                    options={},
+                ),
+            )
+
+        results = await asyncio.gather(*queuing_tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                self._logger.error(
+                    'Error while sending message to queue. Error - {}',
+                    result,
+                )
+        self._logger.info(
+            f'Sent out {len(project_config.projects)} messages to be processed by snapshot builder worker'
+            f' for epoch {epoch.epochId}',
+        )
 
     def _fetch_base_project_list(self, project_type: str) -> List[str]:
         """
@@ -771,100 +728,94 @@ class ProcessorDistributor(multiprocessing.Process):
         self._logger.trace(f'Aggregation Task Distribution time - {int(time.time())}')
 
         # go through aggregator config, if it matches then send appropriate message
-        rabbitmq_publish_tasks = list()
-        async with self._rmq_channel_pool.acquire() as channel:
-            exchange = await channel.get_exchange(
-                name=self._callback_exchange_name,
-            )
-            for config in aggregator_config:
-                task_type = config.project_type
-                if config.aggregate_on == AggregateOn.single_project:
-                    if config.base_project_type not in process_unit.projectId:
-                        self._logger.trace(f'projectId mismatch {process_unit.projectId} {config.base_project_type}')
-                        continue
+        for config in aggregator_config:
+            task_type = config.project_type
+            if config.aggregate_on == AggregateOn.single_project:
+                if config.base_project_type not in process_unit.projectId:
+                    self._logger.trace(f'projectId mismatch {process_unit.projectId} {config.base_project_type}')
+                    continue
+
+                dramatiq.broker.get_broker().enqueue(
+                    dramatiq.Message(
+                        queue_name=AGGREGATION_QUEUE_NAME,
+                        actor_name='handleEvent',  # Match actor name with event_receiver.py
+                        args=(task_type, process_unit.json()),
+                        kwargs={},
+                        options={},
+                    ),
+                )
+            elif config.aggregate_on == AggregateOn.multi_project:
+                projects_to_wait_for = self._gen_projects_to_wait_for(config.project_type)
+                if process_unit.projectId not in projects_to_wait_for:
+                    self._logger.trace(
+                        f'projectId not required for {config.project_type}: {process_unit.projectId}',
+                    )
+                    continue
+
+                # cleanup redis for all previous epochs (5 buffer)
+                await self._redis_conn.zremrangebyscore(
+                    f'powerloom:aggregator:{config.project_type}:events',
+                    0,
+                    process_unit.epochId - 5,
+                )
+
+                await self._redis_conn.zadd(
+                    f'powerloom:aggregator:{config.project_type}:events',
+                    {process_unit.json(): process_unit.epochId},
+                )
+
+                events = await self._redis_conn.zrangebyscore(
+                    f'powerloom:aggregator:{config.project_type}:events',
+                    process_unit.epochId,
+                    process_unit.epochId,
+                )
+
+                if not events:
+                    self._logger.debug(f'No events found for {process_unit.epochId}')
+                    continue
+
+                event_project_ids = set()
+                finalized_messages = list()
+
+                for event in events:
+                    event = PowerloomSnapshotSubmittedMessage.parse_raw(event)
+                    if event.projectId not in event_project_ids:
+                        event_project_ids.add(event.projectId)
+                        finalized_messages.append(event)
+
+                if event_project_ids == projects_to_wait_for:
+                    self._logger.info(
+                        f'All project snapshots accumulated for epoch {process_unit.epochId} against multi aggregate project type {config.project_type}, aggregating',
+                    )
+                    final_msg = PowerloomCalculateAggregateMessage(
+                        messages=sorted(finalized_messages, key=lambda x: x.projectId),
+                        epochId=process_unit.epochId,
+                        timestamp=int(time.time()),
+                    )
 
                     dramatiq.broker.get_broker().enqueue(
                         dramatiq.Message(
                             queue_name=AGGREGATION_QUEUE_NAME,
                             actor_name='handleEvent',  # Match actor name with event_receiver.py
-                            args=(task_type, process_unit.json()),
+                            args=(task_type, final_msg.json()),
                             kwargs={},
                             options={},
                         ),
                     )
-                elif config.aggregate_on == AggregateOn.multi_project:
-                    projects_to_wait_for = self._gen_projects_to_wait_for(config.project_type)
-                    if process_unit.projectId not in projects_to_wait_for:
-                        self._logger.trace(
-                            f'projectId not required for {config.project_type}: {process_unit.projectId}',
-                        )
-                        continue
 
-                    # cleanup redis for all previous epochs (5 buffer)
+                    # Cleanup redis for current epoch
+
                     await self._redis_conn.zremrangebyscore(
                         f'powerloom:aggregator:{config.project_type}:events',
-                        0,
-                        process_unit.epochId - 5,
-                    )
-
-                    await self._redis_conn.zadd(
-                        f'powerloom:aggregator:{config.project_type}:events',
-                        {process_unit.json(): process_unit.epochId},
-                    )
-
-                    events = await self._redis_conn.zrangebyscore(
-                        f'powerloom:aggregator:{config.project_type}:events',
                         process_unit.epochId,
                         process_unit.epochId,
                     )
 
-                    if not events:
-                        self._logger.debug(f'No events found for {process_unit.epochId}')
-                        continue
-
-                    event_project_ids = set()
-                    finalized_messages = list()
-
-                    for event in events:
-                        event = PowerloomSnapshotSubmittedMessage.parse_raw(event)
-                        if event.projectId not in event_project_ids:
-                            event_project_ids.add(event.projectId)
-                            finalized_messages.append(event)
-
-                    if event_project_ids == projects_to_wait_for:
-                        self._logger.info(
-                            f'All project snapshots accumulated for epoch {process_unit.epochId} against multi aggregate project type {config.project_type}, aggregating',
-                        )
-                        final_msg = PowerloomCalculateAggregateMessage(
-                            messages=sorted(finalized_messages, key=lambda x: x.projectId),
-                            epochId=process_unit.epochId,
-                            timestamp=int(time.time()),
-                        )
-
-                        dramatiq.broker.get_broker().enqueue(
-                            dramatiq.Message(
-                                queue_name=AGGREGATION_QUEUE_NAME,
-                                actor_name='handleEvent',  # Match actor name with event_receiver.py
-                                args=(task_type, final_msg.json()),
-                                kwargs={},
-                                options={},
-                            ),
-                        )
-
-                        # Cleanup redis for current epoch
-
-                        await self._redis_conn.zremrangebyscore(
-                            f'powerloom:aggregator:{config.project_type}:events',
-                            process_unit.epochId,
-                            process_unit.epochId,
-                        )
-
-                    else:
-                        self._logger.trace(
-                            f'Not all projects present for epoch {process_unit.epochId} against multi aggregate project type {config.project_type},'
-                            f' {len(projects_to_wait_for) - len(event_project_ids)} missing',
-                        )
-        await asyncio.gather(*rabbitmq_publish_tasks, return_exceptions=True)
+                else:
+                    self._logger.trace(
+                        f'Not all projects present for epoch {process_unit.epochId} against multi aggregate project type {config.project_type},'
+                        f' {len(projects_to_wait_for) - len(event_project_ids)} missing',
+                    )
 
     async def _cleanup_older_epoch_status(self, epoch_id: int):
         """
@@ -881,10 +832,10 @@ class ProcessorDistributor(multiprocessing.Process):
 
     async def process_event(self, event_type, event_data):
         """
-        Callback function to handle incoming RabbitMQ messages.
+        Callback function to handle incoming Dramatiq messages.
 
         Args:
-            message (IncomingMessage): The incoming RabbitMQ message.
+            message (IncomingMessage): The incoming Dramatiq message.
 
         Returns:
             None
@@ -985,7 +936,7 @@ class ProcessorDistributor(multiprocessing.Process):
     def run(self) -> None:
         """
         Runs the ProcessorDistributor by setting resource limits, registering signal handlers,
-        initializing the worker, starting the RabbitMQ consumer, and running the event loop.
+        initializing the worker, starting the Dramatiq worker, and running the event loop.
         """
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         resource.setrlimit(

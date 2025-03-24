@@ -31,7 +31,6 @@ httpx = "^0.24.1"
 fastapi = "^0.95.1"
 ifps-client = {git = "https://git@github.com/PowerLoom/py-ipfs-client.git"}
 aiorwlock = "^1.3.0"
-aio-pika = "^9.1.4"
 fastapi-pagination = "^0.12.12"
 eip712-structs = "^1.1.0"
 coincurve = "^19.0.1"

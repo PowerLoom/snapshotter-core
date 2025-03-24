@@ -74,29 +74,6 @@ class QueueConfig(BaseModel):
     num_instances: int
 
 
-class RabbitMQConfig(BaseModel):
-    """RabbitMQ configuration model."""
-    exchange: str
-
-
-class RabbitMQSetup(BaseModel):
-    """RabbitMQ setup configuration model."""
-    core: RabbitMQConfig
-    callbacks: RabbitMQConfig
-    event_detector: RabbitMQConfig
-    commit_payload: RabbitMQConfig
-    delegated_worker: RabbitMQConfig
-
-
-class RabbitMQ(BaseModel):
-    """RabbitMQ connection configuration model."""
-    user: str
-    password: str
-    host: str
-    port: int
-    setup: RabbitMQSetup
-
-
 class ReportingConfig(BaseModel):
     """Reporting configuration model."""
     slack_url: str
@@ -150,7 +127,6 @@ class CallbackWorkerConfig(BaseModel):
     """Callback worker configuration model."""
     num_snapshot_workers: int
     num_aggregation_workers: int
-    num_delegate_workers: int
 
 
 class IPFSWriterRateLimit(BaseModel):
@@ -214,7 +190,6 @@ class Settings(BaseModel):
     local_collector_port: int
     rlimit: RLimit
     httpx: HTTPXConfig
-    rabbitmq: RabbitMQ
     reporting: ReportingConfig
     redis: Redis
     redis_reader: RedisReader
@@ -295,5 +270,4 @@ class DelegatedTask(BaseModel):
 class PreloaderConfig(BaseModel):
     """Preloader configuration model."""
     preloaders: List[Preloader]
-    delegate_tasks: List[DelegatedTask]
     timeout: int
