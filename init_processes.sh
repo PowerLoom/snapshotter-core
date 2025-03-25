@@ -1,20 +1,19 @@
 #!/bin/bash
 
 
-poetry run python -m snapshotter.snapshotter_id_ping
-ret_status=$?
+service_name=$1
 
-if [ $ret_status -ne 0 ]; then
-    echo "Snapshotter identity check failed on protocol smart contract"
-    exit 1
+if [ "$service_name" == "system_event_detector" ]; then
+    poetry run python -m snapshotter.snapshotter_id_ping
+    ret_status=$?
+
+    if [ $ret_status -ne 0 ]; then
+        echo "Snapshotter identity check failed on protocol smart contract"
+        exit 1
+    fi
 fi
-
 # sleep for 30 seconds to allow other services to start
 sleep 30
 
-echo 'starting processes...';
-pm2 start pm2.config.js
-
-echo 'started all snapshotter scripts';
-
-pm2 logs --lines 1000
+echo "Starting ${service_name}..."
+poetry run python -m snapshotter.$service_name

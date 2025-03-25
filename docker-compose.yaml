@@ -1,123 +1,154 @@
+version: '3.9'
+
+# Shared base configuration for worker services to reduce duplication
+x-snapshotter-base: &snapshotter-base
+  image: ${SNAPSHOTTER_IMAGE:-ghcr.io/powerloom/snapshotter-core:dockerify}
+  depends_on:
+    redis:
+      condition: service_healthy
+    snapshotter-local-collector:
+      condition: service_started
+  volumes:
+    - ./logs/snapshotter:/logs
+    - ./config:/config
+    - ./computes:/computes
+    - ./snapshotter:/snapshotter
+    - ./poetry.lock:/poetry.lock
+    - ./pyproject.toml:/pyproject.toml
+  environment:
+    # Reusable environment variables across services
+    - SIGNER_ACCOUNT_ADDRESS
+    - SIGNER_ACCOUNT_PRIVATE_KEY
+    - SLOT_ID
+    - SOURCE_RPC_URL
+    - PROST_RPC_URL
+    - IPFS_URL
+    - IPFS_API_KEY
+    - IPFS_API_SECRET
+    - PROTOCOL_STATE_CONTRACT
+    - DATA_MARKET_CONTRACT
+    - LOCAL_COLLECTOR_PORT
+    # Reporting configurations
+    - SLACK_REPORTING_URL
+    - POWERLOOM_REPORTING_URL
+    - NAMESPACE
+    - TELEGRAM_REPORTING_URL
+    - TELEGRAM_CHAT_ID
+    # Redis configuration with optional password
+    - REDIS_HOST=${REDIS_HOST:-redis}
+    - REDIS_PORT=${REDIS_PORT:-6379}
+    - REDIS_PASSWORD
+    # Optional S3 configuration for IPFS
+    - IPFS_S3_CONFIG_ENABLED=${IPFS_S3_CONFIG_ENABLED:-false}
+    - IPFS_S3_CONFIG_ENDPOINT_URL
+    - IPFS_S3_CONFIG_BUCKET_NAME
+    - IPFS_S3_CONFIG_ACCESS_KEY
+    - IPFS_S3_CONFIG_SECRET_KEY
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  restart: unless-stopped
+  networks:
+    - custom_network
+
+
 services:
+  # Local Collector Service
   snapshotter-local-collector:
     image: ${SNAPSHOTTER_COLLECTOR_IMAGE:-ghcr.io/powerloom/snapshotter-lite-local-collector:dockerify}
     profiles: ["local-collector"]
     depends_on:
       redis:
         condition: service_healthy
-    expose:
-      - ${LOCAL_COLLECTOR_PORT:-50051}
     ports:
       - ${LOCAL_COLLECTOR_PORT:-50051}:${LOCAL_COLLECTOR_PORT:-50051}
     volumes:
       - ./logs/local-collector:/root/.pm2/logs
     environment:
-      - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
-      - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
-      - IPFS_URL=$IPFS_URL
-      - IPFS_API_KEY=$IPFS_API_KEY
-      - IPFS_API_SECRET=$IPFS_API_SECRET
-      - PROTOCOL_STATE_CONTRACT=$PROTOCOL_STATE_CONTRACT
-      - DATA_MARKET_CONTRACT=$DATA_MARKET_CONTRACT
-      - PROST_RPC_URL=$PROST_RPC_URL
-      - PROST_CHAIN_ID=$PROST_CHAIN_ID
+      # Use a secrets management approach for sensitive information
+      # Consider using Docker secrets or .env file for these
+      - SIGNER_ACCOUNT_ADDRESS
+      - SIGNER_ACCOUNT_PRIVATE_KEY
+      - IPFS_URL
+      - IPFS_API_KEY
+      - IPFS_API_SECRET
+      - PROTOCOL_STATE_CONTRACT
+      - DATA_MARKET_CONTRACT
+      - PROST_RPC_URL
+      - PROST_CHAIN_ID
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
-      - LOCAL_COLLECTOR_PORT=$LOCAL_COLLECTOR_PORT
-      - RELAYER_PRIVATE_KEY=$RELAYER_PRIVATE_KEY
-      - BLOCK_TIME=$BLOCK_TIME
-      - MAX_STREAM_POOL_SIZE=$MAX_STREAM_POOL_SIZE
-      - STREAM_HEALTH_CHECK_TIMEOUT_MS=$STREAM_HEALTH_CHECK_TIMEOUT_MS
-      - STREAM_WRITE_TIMEOUT_MS=$STREAM_WRITE_TIMEOUT_MS
-      - MAX_WRITE_RETRIES=$MAX_WRITE_RETRIES
-      - MAX_CONCURRENT_WRITES=$MAX_CONCURRENT_WRITES
-      - STREAM_POOL_HEALTH_CHECK_INTERVAL=$STREAM_POOL_HEALTH_CHECK_INTERVAL
-      - DATA_MARKET_IN_REQUEST=$DATA_MARKET_IN_REQUEST
+      - LOCAL_COLLECTOR_PORT
+      - RELAYER_PRIVATE_KEY
+      # Configurable stream processing parameters with sensible defaults
+      - BLOCK_TIME=${BLOCK_TIME:-15}
+      - MAX_STREAM_POOL_SIZE=${MAX_STREAM_POOL_SIZE:-100}
+      - STREAM_HEALTH_CHECK_TIMEOUT_MS=${STREAM_HEALTH_CHECK_TIMEOUT_MS:-5000}
+      - STREAM_WRITE_TIMEOUT_MS=${STREAM_WRITE_TIMEOUT_MS:-3000}
+      - MAX_WRITE_RETRIES=${MAX_WRITE_RETRIES:-3}
+      - MAX_CONCURRENT_WRITES=${MAX_CONCURRENT_WRITES:-10}
+      - STREAM_POOL_HEALTH_CHECK_INTERVAL=${STREAM_POOL_HEALTH_CHECK_INTERVAL:-60000}
+      - DATA_MARKET_IN_REQUEST=${DATA_MARKET_IN_REQUEST:-false}
     networks:
       - custom_network
     restart: on-failure:10
+    # Increase file descriptors limit for better performance
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
-  snapshotter-core:
-    image: ${SNAPSHOTTER_IMAGE:-ghcr.io/powerloom/snapshotter-core:dockerify}
+  # Worker services using the base configuration
+  system-event-detector:
+    <<: *snapshotter-base
+    command: bash -c "bash snapshotter_autofill.sh && bash init_processes.sh system_event_detector"
+
+  processor-distributor:
+    <<: *snapshotter-base
+    command: bash -c "bash init_processes.sh processor_distributor"
+    depends_on:
+      - system-event-detector
+
+  snapshot-worker:
+    <<: *snapshotter-base
+    command: bash -c "bash init_processes.sh utils.snapshot_worker"
+    depends_on:
+      - processor-distributor
+    deploy:
+      replicas: ${SNAPSHOT_WORKER_REPLICAS:-6}
+  aggregation-worker:
+    <<: *snapshotter-base
+    command: bash -c "bash init_processes.sh utils.aggregation_worker"
+    depends_on:
+      - processor-distributor
+    deploy:
+      replicas: ${AGGREGATION_WORKER_REPLICAS:-6}
+  # Core API Service
+  core-api:
+    <<: *snapshotter-base
     expose:
       - ${CORE_API_PORT:-8002}
     ports:
-      - ${CORE_API_PORT-8002}:${CORE_API_PORT-8002}
+      - ${CORE_API_PORT:-8002}:${CORE_API_PORT:-8002}
+    command: bash -c "bash init_processes.sh gunicorn_auth_entry_launcher"
     depends_on:
-      redis:
-        condition: service_healthy
-      snapshotter-local-collector:
-        condition: service_started
-    volumes:
-      - ./logs/snapshotter:/logs
-      - ./config:/config
-      - ./computes:/computes
-      - ./snapshotter:/snapshotter
-      - ./poetry.lock:/poetry.lock
-      - ./pyproject.toml:/pyproject.toml
-    environment:
-      - SIGNER_ACCOUNT_ADDRESS=$SIGNER_ACCOUNT_ADDRESS
-      - SIGNER_ACCOUNT_PRIVATE_KEY=$SIGNER_ACCOUNT_PRIVATE_KEY
-      - SLOT_ID=$SLOT_ID
-      - SOURCE_RPC_URL=$SOURCE_RPC_URL
-      - PROST_RPC_URL=$PROST_RPC_URL
-      - IPFS_URL=$IPFS_URL
-      - IPFS_API_KEY=$IPFS_API_KEY
-      - IPFS_API_SECRET=$IPFS_API_SECRET
-      - PROTOCOL_STATE_CONTRACT=$PROTOCOL_STATE_CONTRACT
-      - DATA_MARKET_CONTRACT=$DATA_MARKET_CONTRACT
-      - LOCAL_COLLECTOR_PORT=$LOCAL_COLLECTOR_PORT
-      - SLACK_REPORTING_URL=$SLACK_REPORTING_URL
-      - POWERLOOM_REPORTING_URL=$POWERLOOM_REPORTING_URL
-      - NAMESPACE=$NAMESPACE
-      - TELEGRAM_REPORTING_URL=$TELEGRAM_REPORTING_URL
-      - TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - IPFS_S3_CONFIG_ENABLED=$IPFS_S3_CONFIG_ENABLED
-      - IPFS_S3_CONFIG_ENDPOINT_URL=$IPFS_S3_CONFIG_ENDPOINT_URL
-      - IPFS_S3_CONFIG_BUCKET_NAME=$IPFS_S3_CONFIG_BUCKET_NAME
-      - IPFS_S3_CONFIG_ACCESS_KEY=$IPFS_S3_CONFIG_ACCESS_KEY
-      - IPFS_S3_CONFIG_SECRET_KEY=$IPFS_S3_CONFIG_SECRET_KEY
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    command:
-      bash -c "bash snapshotter_autofill.sh && bash init_processes.sh"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - custom_network
+      - system-event-detector
+  # IPFS Service with improved configuration
   ipfs:
     image: ipfs/kubo:master-latest
     profiles: ["ipfs"]
     environment:
       - IPFS_PROFILE=server
-      - DATA_CLEANUP_DAYS=3
-      - CLEANUP_SCHEDULE=0 */3 * * *
+      # Configurable cleanup parameters
+      - DATA_CLEANUP_DAYS=${IPFS_DATA_CLEANUP_DAYS:-3}
+      - CLEANUP_SCHEDULE=${IPFS_CLEANUP_SCHEDULE:-0 */3 * * *}
       - LIBP2P_FORCE_PNET=0
       - IPFS_ROUTING=dhtclient
     entrypoint: >
       /bin/sh -c '
-      echo "Setting up data cleanup cron job...";
       mkdir -p /var/spool/cron/crontabs;
-      cleanup_cmd="date && echo \"Starting hourly cleanup process...\" && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name \"*.data\" -print -delete && echo \"Hourly cleanup process completed.\"";
+      cleanup_cmd="date && echo \"Starting data cleanup process...\" && find /data/ipfs -type f -mtime +$${DATA_CLEANUP_DAYS} -name \"*.data\" -print -delete && echo \"Data cleanup process completed.\"";
       echo "$${CLEANUP_SCHEDULE} $${cleanup_cmd} >> /proc/1/fd/1 2>&1" > /var/spool/cron/crontabs/root;
       chmod 0644 /var/spool/cron/crontabs/root;
-
-      echo "Cron job set up. Will clean files older than $${DATA_CLEANUP_DAYS} days every hour ($${CLEANUP_SCHEDULE})";
-
-      echo "Starting cron daemon...";
       crond;
-
-      echo "Starting IPFS daemon...";
       exec /sbin/tini -- /usr/local/bin/start_ipfs daemon --migrate=true --agent-version-suffix=docker
       '
     volumes:
@@ -139,9 +170,11 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+
+  # Redis Service
   redis:
-    command: redis-server --appendonly yes
     image: "redis:alpine"
+    command: redis-server --appendonly yes --maxmemory ${REDIS_MAX_MEMORY:-512mb} --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
     expose:
       - 6379
     ports:
@@ -157,6 +190,10 @@ services:
       - custom_network
     volumes:
       - ./redis_data:/data
+    # Add optional password and memory configurations
+    environment:
+      - REDIS_PASSWORD
+
 networks:
   custom_network:
     name: ${DOCKER_NETWORK_NAME}

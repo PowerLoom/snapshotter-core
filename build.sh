@@ -175,6 +175,22 @@ else
     echo "MAX_STREAM_POOL_SIZE not found in .env, setting to default value ${MAX_STREAM_POOL_SIZE}";
 fi
 
+if [ "$SNAPSHOT_WORKER_REPLICAS" ]; then
+    echo "Found SNAPSHOT_WORKER_REPLICAS ${SNAPSHOT_WORKER_REPLICAS}";
+else
+    export SNAPSHOT_WORKER_REPLICAS=6
+    echo "SNAPSHOT_WORKER_REPLICAS not found in .env, setting to default value ${SNAPSHOT_WORKER_REPLICAS}";
+fi
+
+if [ "$AGGREGATION_WORKER_REPLICAS" ]; then
+    echo "Found AGGREGATION_WORKER_REPLICAS ${AGGREGATION_WORKER_REPLICAS}";
+else
+    export AGGREGATION_WORKER_REPLICAS=6
+    echo "AGGREGATION_WORKER_REPLICAS not found in .env, setting to default value ${AGGREGATION_WORKER_REPLICAS}";
+fi
+
+
+
 if [ "$STREAM_POOL_HEALTH_CHECK_INTERVAL" ]; then
     echo "Found STREAM_POOL_HEALTH_CHECK_INTERVAL ${STREAM_POOL_HEALTH_CHECK_INTERVAL}";
 else
