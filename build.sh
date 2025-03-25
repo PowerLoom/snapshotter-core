@@ -189,6 +189,13 @@ else
     echo "AGGREGATION_WORKER_REPLICAS not found in .env, setting to default value ${AGGREGATION_WORKER_REPLICAS}";
 fi
 
+if [ "$RPC_RATE_LIMIT" ]; then
+    echo "Found RPC_RATE_LIMIT ${RPC_RATE_LIMIT}";
+else
+    export RPC_RATE_LIMIT=10
+    echo "RPC_RATE_LIMIT not found in .env, setting to default value ${RPC_RATE_LIMIT}";
+fi
+
 
 
 if [ "$STREAM_POOL_HEALTH_CHECK_INTERVAL" ]; then
@@ -228,8 +235,14 @@ if [ "$DEVMODE" = "true" ]; then
     echo "Building snapshotter..."
     docker build -t snapshotter-core .
 
+    echo "Building rate-limiter..."
+    cd rate-limiter
+    docker build -t rate-limiter .
+    cd ..
+
     export SNAPSHOTTER_COLLECTOR_IMAGE="snapshotter-lite-local-collector"
     export SNAPSHOTTER_IMAGE="snapshotter-core"
+    export RATE_LIMITER_IMAGE="rate-limiter"
 else
     #fetch current git branch name
     GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
