@@ -193,7 +193,7 @@ class ProcessorDistributor(multiprocessing.Process):
         """
         self._rpc_helper = RpcHelper()
         await self._rpc_helper.init()
-        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
+        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
         await self._anchor_rpc_helper.init()
 
     async def _init_httpx_client(self):
@@ -247,7 +247,7 @@ class ProcessorDistributor(multiprocessing.Process):
             abi=protocol_abi,
         )
         try:
-            source_block_time = self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME(
+            source_block_time = await self._protocol_state_contract.functions.SOURCE_CHAIN_BLOCK_TIME(
                 Web3.to_checksum_address(settings.data_market),
             ).call()
         except Exception as e:
@@ -261,7 +261,7 @@ class ProcessorDistributor(multiprocessing.Process):
             self._logger.debug('Set source chain block time to {}', self._source_chain_block_time)
 
         try:
-            epoch_size = self._protocol_state_contract.functions.EPOCH_SIZE(
+            epoch_size = await self._protocol_state_contract.functions.EPOCH_SIZE(
                 Web3.to_checksum_address(settings.data_market),
             ).call()
         except Exception as e:

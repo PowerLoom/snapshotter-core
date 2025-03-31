@@ -1,5 +1,4 @@
 import asyncio
-from functools import wraps
 from typing import Any
 from typing import List
 from typing import Optional
@@ -8,7 +7,6 @@ from typing import Union
 
 import eth_abi
 import tenacity
-from aiolimiter import AsyncLimiter
 from eth_abi.codec import ABICodec
 from eth_utils import keccak
 from hexbytes import HexBytes
@@ -111,38 +109,9 @@ def get_event_sig_and_abi(event_signatures, event_abis):
     return event_sig, event_abi
 
 
-def acquire_rpc_semaphore(fn):
-    """
-    A decorator function that acquires a bounded semaphore before executing the decorated function and releases it
-    after the function is executed. This decorator is intended to be used with async functions.
-
-    Args:
-        fn: The async function to be decorated.
-
-    Returns:
-        The decorated async function.
-    """
-    @wraps(fn)
-    async def wrapped(self, *args, **kwargs):
-        sem: asyncio.BoundedSemaphore = self._semaphore
-        await sem.acquire()
-        result = None
-        try:
-            result = await fn(self, *args, **kwargs)
-            return result
-        except Exception as e:
-            logger.opt(exception=settings.logs.debug_mode).error(
-                'Error in asyncio semaphore acquisition decorator: {}', e,
-            )
-            raise e
-        finally:
-            sem.release()
-    return wrapped
-
-
 class RpcHelper(object):
 
-    def __init__(self, rpc_settings: RPCConfigBase = settings.rpc, archive_mode=False, source_node: bool = False):
+    def __init__(self, rpc_settings: RPCConfigBase = settings.rpc, archive_mode=False):
         """
         Initializes an instance of the RpcHelper class.
 
@@ -156,12 +125,9 @@ class RpcHelper(object):
         self._current_node_index = 0
         self._node_count = 0
         self._initialized = False
-        self._sync_nodes_initialized = False
         self._logger = logger
         self._client = None
         self._async_transport = None
-        self._semaphore = None
-        self._source_node = source_node
 
     async def _init_http_clients(self):
         """
@@ -186,16 +152,16 @@ class RpcHelper(object):
             transport=self._async_transport,
         )
 
-    async def _load_async_web3_providers(self):
+    async def _load_web3_providers(self):
         """
         Loads async web3 providers for each node in the list of nodes.
         If a node already has a web3 client, it is skipped.
         """
         for node in self._nodes:
-            node['web3_client_async'] = AsyncWeb3(
+            node['web3_client'] = AsyncWeb3(
                 AsyncHTTPProvider(node['rpc_url']),
             )
-            self._logger.debug('Loaded async web3 provider for node {}: {}', node['rpc_url'], node['web3_client_async'])
+            self._logger.debug('Loaded async web3 provider for node {}: {}', node['rpc_url'], node['web3_client'])
         self._logger.debug('Post async web3 provider loading: {}', self._nodes)
 
     async def init(self):
@@ -208,80 +174,74 @@ class RpcHelper(object):
             None
         """
         if not self._initialized:
-            self._semaphore = asyncio.BoundedSemaphore(value=settings.rpc.semaphore_value)
-
-            if not self._sync_nodes_initialized:
-                self._logger.debug('Sync nodes not initialized, initializing...')
-                self.sync_init()
-            if self._nodes:
-                await self._init_http_clients()
-                # load async web3 providers
-                for node in self._nodes:
-                    node['web3_client_async'] = AsyncWeb3(
-                        AsyncHTTPProvider(node['rpc_url']),
-                    )
-                    self._logger.debug(
-                        'Loaded async web3 provider for node {}: {}',
-                        node['rpc_url'], node['web3_client_async'],
-                    )
-                self._logger.debug('Post async web3 provider loading: {}', self._nodes)
-                self._initialized = True
-                self._logger.debug('RPC client initialized')
+            if self._archive_mode:
+                nodes = self._rpc_settings.archive_nodes
             else:
-                self._logger.error('No full nor archive nodes found in config')
-
-    def sync_init(self):
-        """
-        Initializes the synchronous nodes for the RPC client.
-
-        This method sets up the Web3 providers for each node specified in the configuration.
-        It handles both full nodes and archive nodes based on the archive_mode setting.
-
-        Raises:
-            Exception: If no full or archive nodes are found in the configuration.
-        """
-        if self._sync_nodes_initialized:
-            return
-        if self._archive_mode:
-            nodes = self._rpc_settings.archive_nodes
-        else:
-            nodes = self._rpc_settings.full_nodes
-        if not nodes:
-            self._logger.error('No full nor archive nodes found in config')
-            raise Exception('No full nor archive nodes found in config')
-        for node in nodes:
-            try:
-                _total_workers = settings.callback_worker_config.num_aggregation_workers + \
-                    settings.callback_worker_config.num_snapshot_workers + 1
-                if self._source_node:
-                    # Adding 1 to account for processor distributor RPC usage
-                    _total_workers += 1
-                else:
-                    # Adding 3 to account for processor distributor, event detector and
-                    # core API usage (assuming there isn't crazy load and it is serving reasonable amount of requests)
-                    _total_workers += 3
+                nodes = self._rpc_settings.full_nodes
+            self._node_count = len(nodes)
+            await self._init_http_clients()
+            # load async web3 providers
+            for node in nodes:
                 self._nodes.append(
                     {
-                        'web3_client': Web3(Web3.HTTPProvider(node.url)),
-                        'web3_client_async': None,
-                        'rpc_url': node.url,
-                        'rate_limiter': AsyncLimiter(
-                            max(1, (node.rate_limit.requests_per_second) // (_total_workers)),
-                            1,
+                        'web3_client': AsyncWeb3(
+                            AsyncHTTPProvider(node.url),
                         ),
+                        'rpc_url': node.url,
                     },
                 )
-            except Exception as exc:
-                self._logger.opt(exception=settings.logs.debug_mode).error(
-                    (
-                        'Error while initialising one of the web3 providers,'
-                        f' err_msg: {exc}'
-                    ),
+                self._logger.debug(
+                    'Loaded async web3 provider for node {}',
+                    node.url,
                 )
+            self._logger.debug('Post async web3 provider loading: {}', self._nodes)
+            self._initialized = True
+            self._logger.debug('RPC client initialized')
+
+    async def check_rate_limit(self, key):
+        """
+        Makes an HTTP call to the rate-limiter service to check if the operation is within rate limits.
+
+        This method contacts an external rate limiting service to determine if the current
+        operation should be allowed to proceed based on configured rate limits. The rate
+        limiter helps prevent overwhelming the RPC nodes with too many requests.
+
+        Args:
+            key: A unique key to identify the rate limit bucket, typically a node index
+
+        Returns:
+            bool: True if the operation is allowed, False otherwise (rate limit exceeded)
+
+        Raises:
+            Exception: If there is an error in communicating with the rate-limiter service
+        """
+        # Generate a unique key for the rate limit bucket based on the function name and arguments
+        rate_limit_key = f'rpc_helper_{key}'
+
+        try:
+            # Check if HTTP client is initialized
+            if self._client is None:
+                self._logger.error('HTTP client not initialized')
+                return True  # Default to allowing the request if client isn't available
+
+            # Make request to rate limiter service
+            response = await self._client.get(f'http://rate-limiter:8000/check/{rate_limit_key}')
+
+            # Process response based on status code
+            if response.status_code == 200:
+                # Request is allowed
+                return True
+            elif response.status_code == 429:
+                # Rate limit exceeded
+                return False
             else:
-                self._logger.debug('Loaded blank node settings for node {}', node.url)
-        self._node_count = len(self._nodes)
-        self._sync_nodes_initialized = True
+                # Handle unexpected response
+                self._logger.warning(f'Unexpected response from rate-limiter: {response.status_code}')
+                return True  # Default to allowing the request to prevent blocking operations
+        except Exception as e:
+            # Log error and default to allowing the request
+            self._logger.error(f'Error checking rate limit: {e}')
+            return True  # Default to allowing the request in case of errors
 
     def get_current_node(self):
         """
@@ -299,16 +259,22 @@ class RpcHelper(object):
             raise Exception('No full nodes available')
         return self._nodes[self._current_node_index]
 
-    @acquire_rpc_semaphore
     async def get_transaction_from_hash(self, tx_hash: str):
         """
         Retrieves the transaction details from the blockchain.
+
+        This method fetches transaction details for a given transaction hash. It uses
+        the retry decorator to handle temporary failures by retrying the operation with
+        exponential backoff.
 
         Args:
             tx_hash (str): The hash of the transaction to retrieve.
 
         Returns:
             dict: The transaction details.
+
+        Raises:
+            RPCException: If there's an error retrieving the transaction after all retries.
         """
         @retry(
             reraise=True,
@@ -318,13 +284,25 @@ class RpcHelper(object):
             before_sleep=self._on_node_exception,
         )
         async def f(node_idx):
+            # Check rate limit before proceeding
+            if not await self.check_rate_limit(node_idx):
+                raise RPCException(
+                    request={'tx_hash': tx_hash},
+                    response=None,
+                    underlying_exception=Exception('Rate limit exceeded'),
+                    extra_info='RPC_GET_TRANSACTION_ERROR: Rate limit exceeded',
+                )
+
+            # Get the node to use for this request
             node = self._nodes[node_idx]
-            web3_provider = node['web3_client_async']
+            web3_provider = node['web3_client']
 
             try:
+                # Attempt to get the transaction
                 transaction = await web3_provider.eth.get_transaction(tx_hash)
                 return transaction
             except Exception as e:
+                # Create and raise a structured exception with details
                 exc = RPCException(
                     request={'txHash': tx_hash},
                     response=None,
@@ -334,12 +312,16 @@ class RpcHelper(object):
                 self._logger.trace('Error in get_transaction_from_hash, error {}', str(exc))
                 raise exc
 
+        # Start with node index 0
         return await f(node_idx=0)
 
     def _on_node_exception(self, retry_state: tenacity.RetryCallState):
         """
         Callback function to handle exceptions raised during RPC calls to nodes.
-        It updates the node index to retry the RPC call on the next node.
+
+        This method is called before a retry attempt when an RPC call fails. It updates
+        the node index to retry the RPC call on the next node in the pool, implementing
+        a round-robin approach to node selection for retries.
 
         Args:
             retry_state (tenacity.RetryCallState): The retry state object containing information about the retry.
@@ -347,9 +329,16 @@ class RpcHelper(object):
         Returns:
             None
         """
+        # Get the index of the node that failed
         exc_idx = retry_state.kwargs['node_idx']
+
+        # Calculate the next node index using modulo to wrap around
         next_node_idx = (retry_state.kwargs.get('node_idx', 0) + 1) % self._node_count
+
+        # Update the node index for the next retry
         retry_state.kwargs['node_idx'] = next_node_idx
+
+        # Log the exception and node change
         self._logger.warning(
             'Found exception while performing RPC {} on node {} at idx {}. '
             'Injecting next node {} at idx {} | exception: {} ',
@@ -357,18 +346,19 @@ class RpcHelper(object):
             next_node_idx, retry_state.outcome.exception(),
         )
 
-    async def _rate_limited_call(self, coroutine, node_idx):
-        async with self._nodes[node_idx]['rate_limiter']:
-            return await coroutine
-
-    @acquire_rpc_semaphore
     async def get_current_block_number(self):
         """
+        Gets the current block number from the Ethereum blockchain.
+
+        This method fetches the latest block number from the blockchain. It uses
+        the retry decorator to handle temporary failures by retrying the operation
+        with exponential backoff.
+
         Returns:
             int: The current block number of the Ethereum blockchain.
 
         Raises:
-            RPCException: If an error occurs while making the RPC call.
+            RPCException: If an error occurs while making the RPC call after all retries.
         """
         @retry(
             reraise=True,
@@ -378,12 +368,24 @@ class RpcHelper(object):
             before_sleep=self._on_node_exception,
         )
         async def f(node_idx):
+            # Check rate limit before proceeding
+            if not await self.check_rate_limit(node_idx):
+                raise RPCException(
+                    request='get_current_block_number',
+                    response=None,
+                    underlying_exception=Exception('Rate limit exceeded'),
+                    extra_info='RPC_GET_CURRENT_BLOCKNUMBER ERROR: Rate limit exceeded',
+                )
+
+            # Get the node to use for this request
             node = self._nodes[node_idx]
-            web3_provider = node['web3_client_async']
+            web3_provider = node['web3_client']
 
             try:
-                current_block = await self._rate_limited_call(web3_provider.eth.block_number, node_idx)
+                # Attempt to get the current block number
+                current_block = await web3_provider.eth.block_number
             except Exception as e:
+                # Create and raise a structured exception with details
                 exc = RPCException(
                     request='get_current_block_number',
                     response=None,
@@ -394,12 +396,17 @@ class RpcHelper(object):
                 raise exc
             else:
                 return current_block
+
+        # Start with node index 0
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def get_transaction_receipt(self, tx_hash):
         """
         Retrieves the transaction receipt for a given transaction hash.
+
+        This method fetches the receipt of a transaction that has been included in a block.
+        The receipt contains information about the execution of the transaction, including
+        gas used, logs generated, and the transaction status.
 
         Args:
             tx_hash (str): The transaction hash for which to retrieve the receipt.
@@ -408,7 +415,7 @@ class RpcHelper(object):
             dict: The transaction receipt details as a dictionary.
 
         Raises:
-            RPCException: If an error occurs while retrieving the transaction receipt.
+            RPCException: If an error occurs while retrieving the transaction receipt after all retries.
         """
 
         @retry(
@@ -419,14 +426,23 @@ class RpcHelper(object):
             before_sleep=self._on_node_exception,
         )
         async def f(node_idx):
+            # Check rate limit before proceeding
+            if not await self.check_rate_limit(node_idx):
+                raise RPCException(
+                    request={'tx_hash': tx_hash},
+                    response=None,
+                    underlying_exception=Exception('Rate limit exceeded'),
+                    extra_info='RPC_GET_TRANSACTION_RECEIPT_ERROR: Rate limit exceeded',
+                )
+
+            # Get the node to use for this request
             node = self._nodes[node_idx]
 
             try:
-                tx_receipt_details = await self._rate_limited_call(
-                    node['web3_client_async'].eth.get_transaction_receipt(tx_hash),
-                    node_idx,
-                )
+                # Attempt to get the transaction receipt
+                tx_receipt_details = await node['web3_client'].eth.get_transaction_receipt(tx_hash)
             except Exception as e:
+                # Create and raise a structured exception with details
                 exc = RPCException(
                     request={
                         'txHash': tx_hash,
@@ -439,21 +455,25 @@ class RpcHelper(object):
                 raise exc
             else:
                 return tx_receipt_details
+
+        # Start with node index 0
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def get_current_block(self, node_idx=0):
         """
         Returns the current block number of the Ethereum blockchain.
 
+        This is an alternative implementation to get_current_block_number that allows
+        specifying the node index to use.
+
         Args:
-            node_idx (int): Index of the node to use for the RPC call.
+            node_idx (int): Index of the node to use for the RPC call. Defaults to 0.
 
         Returns:
             int: The current block number of the Ethereum blockchain.
 
         Raises:
-            RPCException: If an error occurs while making the RPC call.
+            RPCException: If an error occurs while making the RPC call after all retries.
         """
         @retry(
             reraise=True,
@@ -463,12 +483,24 @@ class RpcHelper(object):
             before_sleep=self._on_node_exception,
         )
         async def f(node_idx):
+            # Check rate limit before proceeding
+            if not await self.check_rate_limit(node_idx):
+                raise RPCException(
+                    request='get_current_block_number',
+                    response=None,
+                    underlying_exception=Exception('Rate limit exceeded'),
+                    extra_info='RPC_GET_CURRENT_BLOCKNUMBER ERROR: Rate limit exceeded',
+                )
+
+            # Get the node to use for this request
             node = self._nodes[node_idx]
-            web3_provider = node['web3_client_async']
+            web3_provider = node['web3_client']
 
             try:
-                current_block = await self._rate_limited_call(web3_provider.eth.block_number, node_idx)
+                # Attempt to get the current block number
+                current_block = await web3_provider.eth.block_number
             except Exception as e:
+                # Create and raise a structured exception with details
                 exc = RPCException(
                     request='get_current_block_number',
                     response=None,
@@ -479,12 +511,16 @@ class RpcHelper(object):
                 raise exc
             else:
                 return current_block
-        return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
+        # Use the provided node index
+        return await f(node_idx=node_idx)
+
     async def web3_call(self, tasks, contract_addr, abi):
         """
         Calls the given tasks asynchronously using web3 and returns the response.
+
+        This method executes multiple contract function calls in parallel using asyncio.gather.
+        Each task is a tuple containing the function name and its arguments.
 
         Args:
             tasks (list): List of tuples of (contract functions, contract args) to call. By name.
@@ -495,7 +531,7 @@ class RpcHelper(object):
             list: List of responses from the contract function calls.
 
         Raises:
-            RPCException: If an error occurs during the web3 batch call.
+            RPCException: If an error occurs during the web3 batch call after all retries.
         """
         @retry(
             reraise=True,
@@ -505,28 +541,42 @@ class RpcHelper(object):
             before_sleep=self._on_node_exception,
         )
         async def f(node_idx):
+            # Check rate limit before proceeding
+            if not await self.check_rate_limit(node_idx):
+                raise RPCException(
+                    request=tasks,
+                    response=None,
+                    underlying_exception=Exception('Rate limit exceeded'),
+                    extra_info='RPC_WEB3_CALL_ERROR: Rate limit exceeded',
+                )
             try:
+                # Get the node to use for this request
                 node = self._nodes[node_idx]
-                contract_obj = node['web3_client_async'].eth.contract(
+
+                # Create contract object
+                contract_obj = node['web3_client'].eth.contract(
                     address=contract_addr,
                     abi=abi,
                 )
+
+                # Create a list of web3 tasks to execute in parallel
                 web3_tasks = [
-                    self._rate_limited_call(
-                        contract_obj.functions[task[0]](*task[1]).call(),
-                        node_idx,
-                    ) for task in tasks
+                    contract_obj.functions[task[0]](*task[1]).call() for task in tasks
                 ]
+
+                # Execute all tasks in parallel
                 response = await asyncio.gather(*web3_tasks)
                 return response
             except Exception as e:
-                # Create a serializable version of the tasks
+                # Create a serializable version of the tasks for error reporting
                 serializable_tasks = [
                     {
                         'function_name': task[0],
                         'args': task[1],
                     } for task in tasks
                 ]
+
+                # Create and raise a structured exception with details
                 exc = RPCException(
                     request=serializable_tasks,
                     response=None,
@@ -540,13 +590,17 @@ class RpcHelper(object):
                     err=str(exc),
                 )
                 raise exc
+
+        # Start with node index 0
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def web3_call_with_override(self, tasks, contract_addr, abi, overrides):
         """
         Calls the given tasks asynchronously using web3 and returns the response.
         Supports overriding of the contract state.
+
+        This method is similar to web3_call but allows specifying state overrides,
+        which can be used to simulate calls with modified contract state.
 
         Args:
             tasks (list): List of tuples of (contract functions, contract args) to call. By name.
@@ -558,7 +612,7 @@ class RpcHelper(object):
             list: List of responses from the contract function calls.
 
         Raises:
-            RPCException: If an error occurs during the web3 batch call.
+            RPCException: If an error occurs during the web3 batch call after all retries.
         """
         @retry(
             reraise=True,
@@ -569,48 +623,66 @@ class RpcHelper(object):
         )
         async def f(node_idx):
             try:
+                # Get the node to use for this request
                 node = self._nodes[node_idx]
-                contract_obj = node['web3_client_async'].eth.contract(
+
+                # Create contract object
+                contract_obj = node['web3_client'].eth.contract(
                     address=contract_addr,
                     abi=abi,
                 )
+
+                # Create a list of web3 tasks with state overrides
                 web3_tasks = []
                 for task in tasks:
                     function_name, args = task
+
+                    # Encode the function call data
                     function = contract_obj.functions[function_name]
                     call_data = function(*args)._encode_transaction_data()
+
+                    # Create the payload for eth_call
                     payload = {
                         'to': contract_addr,
                         'data': call_data,
                     }
+
+                    # Add the task to the list
                     web3_tasks.append(
-                        self._rate_limited_call(
-                            node['web3_client_async'].eth.call(payload, state_override=overrides),
-                            node_idx,
-                        ),
+                        node['web3_client'].eth.call(payload, state_override=overrides),
                     )
 
+                # Execute all tasks in parallel
                 raw_results = await asyncio.gather(*web3_tasks)
 
                 # Decode the results using eth_abi
                 decoded_results = []
                 for i, result in enumerate(raw_results):
                     function_name, _ = tasks[i]
+
+                    # Find the function ABI
                     function_abi = next(func for func in abi if func['name'] == function_name)
+
+                    # Get output types for decoding
                     output_types = [output['type'] for output in function_abi['outputs']]
+
+                    # Decode the result
                     decoded_result = eth_abi.decode(output_types, result)
+
                     # If there's only one output, return it directly; otherwise, return the tuple
                     decoded_results.append(decoded_result[0] if len(decoded_result) == 1 else decoded_result)
 
                 return decoded_results
             except Exception as e:
-                # Create a serializable version of the tasks
+                # Create a serializable version of the tasks for error reporting
                 serializable_tasks = [
                     {
                         'function_name': task[0],
                         'args': task[1],
                     } for task in tasks
                 ]
+
+                # Create and raise a structured exception with details
                 exc = RPCException(
                     request=serializable_tasks,
                     response=None,
@@ -624,9 +696,10 @@ class RpcHelper(object):
                     err=str(exc),
                 )
                 raise exc
+
+        # Start with node index 0
         return await f(node_idx=0)
 
-    @acquire_rpc_semaphore
     async def batch_web3_contract_calls(
         self,
         tasks: List[Tuple[str, List[Any]]],
@@ -636,6 +709,10 @@ class RpcHelper(object):
         """
         Performs batch web3 calls for multiple contract functions.
 
+        This method uses JSON-RPC batch requests to efficiently execute multiple
+        contract function calls in a single request. It can optionally override
+        the block number for each call.
+
         Args:
             contract_obj: Web3 contract object.
             tasks: List of tuples, each containing (function_name, function_args).
@@ -643,8 +720,13 @@ class RpcHelper(object):
 
         Returns:
             List[Any]: List of results from the batch call.
+
+        Raises:
+            ValueError: If block_override is provided but its length doesn't match tasks length.
+            RPCException: If an error occurs during the batch call.
         """
 
+        # Validate block_override length if provided
         if block_override and len(block_override) != len(tasks):
             self._logger.error(
                 'Block override length {} is not equal to the number of tasks {}.',
@@ -656,9 +738,14 @@ class RpcHelper(object):
         batch = []
         req_id = 1
         for i, task in enumerate(tasks):
+            # Determine block number - use override if provided, otherwise 'latest'
             block = hex(block_override[i]) if block_override else 'latest'
+
+            # Get the function and encode its call data
             function = contract_obj.functions[task[0]]
             call_data = function(*task[1])._encode_transaction_data()
+
+            # Add the call to the batch
             batch.append({
                 'jsonrpc': '2.0',
                 'method': 'eth_call',
@@ -675,16 +762,21 @@ class RpcHelper(object):
         try:
             # Make batch RPC call
             response_data = await self._make_rpc_jsonrpc_call(batch)
+
             # Process responses
             results = []
             abi_dict = get_contract_abi_dict(contract_obj.abi)
+
             for i, response in enumerate(response_data):
                 if 'result' in response:
+                    # Get function name and decode the result
                     function_name, _ = tasks[i]
                     decoded_result = eth_abi.decode(
                         abi_dict.get(function_name)['output'],
                         HexBytes(response['result']),
                     )
+
+                    # If there's only one output, return it directly; otherwise, return the tuple
                     results.append(decoded_result[0] if len(decoded_result) == 1 else decoded_result)
                 else:
                     # Handle individual response errors
@@ -697,6 +789,7 @@ class RpcHelper(object):
 
             return results
         except Exception as e:
+            # Create and raise a structured exception with details
             exc = RPCException(
                 request=batch,
                 response=None,
@@ -706,19 +799,22 @@ class RpcHelper(object):
             self._logger.trace('Error in batch_web3_calls, error {}', str(exc))
             raise exc
 
-    @acquire_rpc_semaphore
     async def _make_rpc_jsonrpc_call(self, rpc_query, redis_conn=None):
         """
         Makes an RPC JSON-RPC call to a node in the pool.
 
+        This is a core method that handles the actual HTTP communication with the RPC nodes.
+        It supports both single and batch JSON-RPC requests and handles various error conditions.
+
         Args:
-            rpc_query (dict): The JSON-RPC query to be sent.
+            rpc_query (dict or list): The JSON-RPC query or queries to be sent.
+            redis_conn (Optional): Redis connection for caching (not currently used).
 
         Returns:
-            dict: The JSON-RPC response data.
+            dict or list: The JSON-RPC response data.
 
         Raises:
-            RPCException: If there is an error in making the JSON-RPC call.
+            RPCException: If there is an error in making the JSON-RPC call after all retries.
         """
         @retry(
             reraise=True,
@@ -728,16 +824,24 @@ class RpcHelper(object):
             before_sleep=self._on_node_exception,
         )
         async def f(node_idx):
+            # Check rate limit before proceeding
+            if not await self.check_rate_limit(node_idx):
+                raise RPCException(
+                    request=rpc_query,
+                    response=None,
+                    underlying_exception=Exception('Rate limit exceeded'),
+                    extra_info='RPC_BATCH_ETH_CALL_ERROR: Rate limit exceeded',
+                )
 
+            # Get the node to use for this request
             node = self._nodes[node_idx]
             rpc_url = node.get('rpc_url')
             try:
-                response = await self._rate_limited_call(
-                    self._client.post(url=rpc_url, json=rpc_query),
-                    node_idx,
-                )
+                # Make the actual HTTP request to the RPC endpoint
+                response = await self._client.post(url=rpc_url, json=rpc_query)
                 response_data = response.json()
             except Exception as e:
+                # Handle any exceptions during the HTTP request
                 exc = RPCException(
                     request=rpc_query,
                     response=None,
@@ -749,6 +853,7 @@ class RpcHelper(object):
                 )
                 raise exc
 
+            # Check for HTTP-level errors
             if response.status_code != 200:
                 raise RPCException(
                     request=rpc_query,
@@ -757,14 +862,21 @@ class RpcHelper(object):
                     extra_info=f'RPC_CALL_ERROR: {response.text}',
                 )
 
+            # Process the response data and handle any RPC-level errors
             response_exceptions = []
             return_response_data = None
             trie_node_exc = False
+
+            # Handle batch responses (list of responses)
             if isinstance(response_data, list):
                 return_response_list = []
                 for response_item in response_data:
                     if 'error' in response_item:
-                        if isinstance(response_item['error'], dict) and 'message' in response_item['error'] and 'missing trie node' in response_item['error']['message']:
+                        if (
+                            isinstance(response_item['error'], dict) and
+                            'message' in response_item['error'] and
+                                'missing trie node' in response_item['error']['message']
+                        ):
                             # do not raise exception for missing trie node error, further retries will only be wasteful
                             trie_node_exc = True
                             continue
@@ -772,15 +884,21 @@ class RpcHelper(object):
                     else:
                         return_response_list.append(response_item)
                 return_response_data = return_response_list
+            # Handle single response (dictionary)
             else:
                 if 'error' in response_data:
-                    if isinstance(response_data['error'], dict) and 'message' in response_data['error'] and 'missing trie node' in response_data['error']['message']:
+                    if (
+                        isinstance(response_data['error'], dict) and
+                        'message' in response_data['error'] and
+                            'missing trie node' in response_data['error']['message']
+                    ):
                         # do not raise exception for missing trie node error, further retries will only be wasteful
                         trie_node_exc = True
                     response_exceptions.append(response_data['error'])
                 else:   # if response is not a list, it is a dict
                     return_response_data = response_data
 
+            # Raise exception if there were errors (except for trie node errors which we ignore)
             if response_exceptions and not trie_node_exc:
                 raise RPCException(
                     request=rpc_query,
@@ -790,6 +908,8 @@ class RpcHelper(object):
                 )
 
             return return_response_data
+
+        # Execute the inner function with the first node (index 0)
         return await f(node_idx=0)
 
     async def batch_eth_get_balance_on_block_range(
@@ -1013,7 +1133,6 @@ class RpcHelper(object):
         response_data = await self._make_rpc_jsonrpc_call(rpc_query)
         return response_data
 
-    @acquire_rpc_semaphore
     async def get_events_logs(
         self, contract_address, to_block, from_block, topics, event_abi,
     ):
@@ -1041,10 +1160,19 @@ class RpcHelper(object):
             before_sleep=self._on_node_exception,
         )
         async def f(node_idx):
+            if not await self.check_rate_limit(node_idx):
+                raise RPCException(
+                    request={
+                        'contract_address': contract_address, 'to_block': to_block,
+                        'from_block': from_block, 'topics': topics,
+                    },
+                    response=None,
+                    underlying_exception=Exception('Rate limit exceeded'),
+                    extra_info='RPC_GET_EVENT_LOGS_ERROR: Rate limit exceeded',
+                )
             node = self._nodes[node_idx]
             rpc_url = node.get('rpc_url')
-
-            web3_provider = node['web3_client_async']
+            web3_provider = node['web3_client']
 
             event_log_query = {
                 'address': Web3.to_checksum_address(contract_address),
@@ -1053,10 +1181,7 @@ class RpcHelper(object):
                 'topics': topics,
             }
             try:
-                event_log = await self._rate_limited_call(
-                    web3_provider.eth.get_logs(event_log_query),
-                    node_idx,
-                )
+                event_log = await web3_provider.eth.get_logs(event_log_query)
                 codec: ABICodec = web3_provider.codec
                 all_events = []
                 for log in event_log:

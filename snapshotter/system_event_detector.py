@@ -107,7 +107,7 @@ class EventDetectorProcess(multiprocessing.Process):
 
         self._last_processed_block = None
         self._source_rpc_helper = RpcHelper(rpc_settings=settings.rpc)
-        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc, source_node=False)
+        self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
         self.contract_abi = None
         self._logger = None
         self.contract_address = settings.protocol_state.address
