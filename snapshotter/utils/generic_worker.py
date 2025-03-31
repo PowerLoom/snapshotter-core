@@ -401,7 +401,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         await self._rpc_helper.init()
         self._anchor_rpc_helper = RpcHelper(rpc_settings=settings.anchor_chain_rpc)
         await self._anchor_rpc_helper.init()
-        await self._anchor_rpc_helper._load_async_web3_providers()
         self._protocol_state_contract = self._anchor_rpc_helper.get_current_node()['web3_client'].eth.contract(
             address=Web3.to_checksum_address(
                 self.protocol_state_contract_address,
@@ -412,7 +411,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             ),
         )
 
-        self._w3 = self._anchor_rpc_helper._nodes[0]['web3_client_async']
+        self._w3 = self._anchor_rpc_helper._nodes[0]['web3_client']
         self._chain_id = await self._w3.eth.chain_id
         self._logger.debug('Set anchor chain ID to {}', self._chain_id)
         self._domain_separator = make_domain(
