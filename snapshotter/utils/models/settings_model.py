@@ -135,15 +135,6 @@ class ExternalAPIAuth(BaseModel):
     apiSecret: str = ''  # This is most likely used as a basic auth tuple of (username, password)
 
 
-class IPFSS3Config(BaseModel):
-    """IPFS S3 configuration model."""
-    enabled: bool
-    endpoint_url: str
-    bucket_name: str
-    access_key: str
-    secret_key: str
-
-
 class RelayerService(BaseModel):
     """Relayer service configuration model."""
     host: str
@@ -195,7 +186,6 @@ class Settings(BaseModel):
     protocol_state: EventContract
     callback_worker_config: CallbackWorkerConfig
     ipfs: IPFSConfig
-    ipfs_s3_config: IPFSS3Config
     node_version: str
     anchor_chain_rpc: RPCConfigBase
 

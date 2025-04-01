@@ -43,7 +43,6 @@ from snapshotter.settings.config import settings
 from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.file_utils import read_json_file
-from snapshotter.utils.ipfs_s3_utils import S3Uploader
 from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
@@ -213,10 +212,7 @@ class GenericAsyncWorker(multiprocessing.Process):
         Returns:
             str: The CID of the uploaded snapshot.
         """
-        if settings.ipfs_s3_config.enabled:
-            snapshot_cid = await self._s3_uploader.upload_file(snapshot)
-        else:
-            snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
+        snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
         return snapshot_cid
 
     async def generate_signature(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):
@@ -638,8 +634,6 @@ class GenericAsyncWorker(multiprocessing.Process):
         await self._ipfs_singleton.init_sessions()
         self._ipfs_writer_client = self._ipfs_singleton._ipfs_write_client
         self._ipfs_reader_client = self._ipfs_singleton._ipfs_read_client
-        if settings.ipfs_s3_config.enabled:
-            self._s3_uploader = S3Uploader(settings.ipfs_s3_config)
 
     async def init(self):
         """
