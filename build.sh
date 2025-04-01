@@ -189,11 +189,11 @@ else
     echo "AGGREGATION_WORKER_REPLICAS not found in .env, setting to default value ${AGGREGATION_WORKER_REPLICAS}";
 fi
 
-if [ "$RPC_RATE_LIMIT" ]; then
-    echo "Found RPC_RATE_LIMIT ${RPC_RATE_LIMIT}";
+if [ "$DEFAULT_RATE_LIMIT" ]; then
+    echo "Found DEFAULT_RATE_LIMIT ${DEFAULT_RATE_LIMIT}";
 else
-    export RPC_RATE_LIMIT=10
-    echo "RPC_RATE_LIMIT not found in .env, setting to default value ${RPC_RATE_LIMIT}";
+    export DEFAULT_RATE_LIMIT=10
+    echo "DEFAULT_RATE_LIMIT not found in .env, setting to default value ${DEFAULT_RATE_LIMIT}";
 fi
 
 

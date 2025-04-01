@@ -15,7 +15,6 @@ from snapshotter.utils.data_utils import get_project_epoch_snapshot_bulk
 from snapshotter.utils.data_utils import get_project_finalized_cid
 from snapshotter.utils.data_utils import get_project_finalized_cids_bulk
 from snapshotter.utils.data_utils import get_submission_data_bulk
-from snapshotter.utils.models.settings_model import RateLimitConfig
 from snapshotter.utils.models.settings_model import RPCConfigFull
 from snapshotter.utils.models.settings_model import RPCNodeConfig
 from snapshotter.utils.redis.redis_keys import cid_not_found_key
@@ -51,9 +50,6 @@ TEST_RPC_CONFIG = RPCConfigFull(
     full_nodes=[
         RPCNodeConfig(
             url='http://127.0.0.1:8545',
-            rate_limit=RateLimitConfig(
-                requests_per_second=10,
-            ),
         ),
     ],
     connection_limits=settings.rpc.connection_limits,

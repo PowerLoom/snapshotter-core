@@ -22,15 +22,9 @@ class CoreAPI(BaseModel):
     public_rate_limit: str
 
 
-class RateLimitConfig(BaseModel):
-    """RPC Rate limit configuration model."""
-    requests_per_second: int
-
-
 class RPCNodeConfig(BaseModel):
     """RPC node configuration model."""
     url: str
-    rate_limit: RateLimitConfig
 
 
 class ConnectionLimits(BaseModel):

@@ -31,7 +31,6 @@ from snapshotter.utils.models.data_models import SnapshotterStateUpdate
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotSubmittedMessage
 from snapshotter.utils.models.settings_model import AggregateOn
-from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 
 AGGREGATION_QUEUE_NAME = f'powerloom-aggregator_{settings.namespace}_{settings.instance_id}'
@@ -178,11 +177,6 @@ class AggregationAsyncWorker(GenericAsyncWorker):
         project_id = self._gen_project_id(task_type, msg_obj)
 
         try:
-            # Load rate limiting scripts if not already loaded
-            if not self._rate_limiting_lua_scripts:
-                self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
-                    self._redis_conn,
-                )
             self._logger.info(
                 'Got epoch to process for {}: {}',
                 task_type, msg_obj,

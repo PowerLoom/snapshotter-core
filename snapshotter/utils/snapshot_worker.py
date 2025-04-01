@@ -27,7 +27,6 @@ from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
 from snapshotter.utils.models.data_models import SnapshotterStateUpdate
 from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMessage
-from snapshotter.utils.redis.rate_limiter import load_rate_limiter_scripts
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 from snapshotter.utils.redis.redis_keys import last_snapshot_processing_complete_timestamp_key
 from snapshotter.utils.redis.redis_keys import submitted_base_snapshots_key
@@ -364,11 +363,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             )
             return
 
-        # Load rate limiting scripts if not already loaded
-        if not self._rate_limiting_lua_scripts:
-            self._rate_limiting_lua_scripts = await load_rate_limiter_scripts(
-                self._redis_conn,
-            )
         self._logger.info(
             'Got epoch to process for {}: {}',
             task_type, msg_obj,

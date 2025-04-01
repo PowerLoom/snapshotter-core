@@ -8,7 +8,6 @@ from web3 import AsyncWeb3
 from web3.contract import AsyncContract
 
 from snapshotter.settings.config import settings
-from snapshotter.utils.models.settings_model import RateLimitConfig
 from snapshotter.utils.models.settings_model import RPCConfigFull
 from snapshotter.utils.models.settings_model import RPCNodeConfig
 from snapshotter.utils.rpc import get_contract_abi_dict
@@ -41,17 +40,10 @@ Note: These tests use a custom RPC configuration (TEST_RPC_CONFIG) that points t
 
 # Custom RPC config for testing with Hardhat
 
-RATE_LIMIT_OVERRIDE = RateLimitConfig(
-    requests_per_second=1,
-)
-
 TEST_RPC_CONFIG = RPCConfigFull(
     full_nodes=[
         RPCNodeConfig(
             url='http://127.0.0.1:8545',
-            rate_limit=RateLimitConfig(
-                requests_per_second=10,
-            ),
         ),
     ],
     connection_limits=settings.rpc.connection_limits,
