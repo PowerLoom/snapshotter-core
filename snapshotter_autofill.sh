@@ -83,7 +83,7 @@ fi
 
 if [ "$IPFS_S3_CONFIG_ENABLED" = "true" ]; then
     echo "Found IPFS_S3_CONFIG_ENABLED ${IPFS_S3_CONFIG_ENABLED}";
-    export ipfs_s3_config_enabled="${IPFS_S3_CONFIG_ENABLED}";
+    export ipfs_s3_config_enabled="true";
     export ipfs_s3_config_endpoint_url="${IPFS_S3_CONFIG_ENDPOINT_URL}";
     export ipfs_s3_config_bucket_name="${IPFS_S3_CONFIG_BUCKET_NAME}";
     export ipfs_s3_config_access_key="${IPFS_S3_CONFIG_ACCESS_KEY}";
@@ -170,11 +170,16 @@ else
     sed -i'.backup' "s#\"redis-password\"#null#" config/settings.json
 fi
 
-sed -i'.backup' "s#ipfs-s3-config-enabled#$ipfs_s3_config_enabled#" config/settings.json
 sed -i'.backup' "s#ipfs-s3-endpoint-url#$ipfs_s3_config_endpoint_url#" config/settings.json
 sed -i'.backup' "s#ipfs-s3-bucket-name#$ipfs_s3_config_bucket_name#" config/settings.json
 sed -i'.backup' "s#ipfs-s3-access-key#$ipfs_s3_config_access_key#" config/settings.json
 sed -i'.backup' "s#ipfs-s3-secret-key#$ipfs_s3_config_secret_key#" config/settings.json
+
+if [ "$ipfs_s3_config_enabled" = "true" ]; then
+    sed -i'.backup' 's#"ipfs-s3-config-enabled"#true#' config/settings.json
+else
+    sed -i'.backup' 's#"ipfs-s3-config-enabled"#false#' config/settings.json
+fi
 
 # Add the same replacements for auth_settings.json
 sed -i'.backup' "s#redis-host#$REDIS_HOST#" config/auth_settings.json

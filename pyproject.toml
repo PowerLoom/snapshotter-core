@@ -8,7 +8,7 @@ readme = "README.md"
 package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.10.13"
 redis = "^4.6.0"
 timeago = "^1.0.16"
 typer = "^0.7.0"
@@ -37,9 +37,8 @@ coincurve = "^19.0.1"
 grpclib = {extras = ["protobuf"], version = "^0.4.7"}
 grpcio-tools = "^1.62.1"
 aiolimiter = "^1.1.0"
-aioboto3 = "^13.2.0"
+aioboto3 = "^14.1.0"
 dramatiq = "^1.17.1"
-
 
 [tool.poetry.group.dev.dependencies]
 pytest-cov = "^5.0.0"

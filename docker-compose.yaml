@@ -136,7 +136,7 @@ services:
       - ${CORE_API_PORT:-8002}
     ports:
       - ${CORE_API_PORT:-8002}:${CORE_API_PORT:-8002}
-    command: bash -c "bash init_processes.sh gunicorn_auth_entry_launcher"
+    command: bash -c "bash init_processes.sh gunicorn_core_launcher"
     depends_on:
       - system-event-detector
   # IPFS Service with improved configuration
