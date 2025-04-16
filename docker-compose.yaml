@@ -46,6 +46,14 @@ x-snapshotter-base: &snapshotter-base
     - IPFS_S3_CONFIG_SECRET_KEY
   extra_hosts:
     - "host.docker.internal:host-gateway"
+  healthcheck:
+    # Use CMD-SHELL to evaluate hostname within the container's shell
+    # Make sure the path /snapshotter/health_ping.py is correct inside the container
+    test: ["CMD-SHELL", "poetry run python -m snapshotter.health_ping $$(hostname) || exit 1"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s # Give container time to start and report first health status
   restart: unless-stopped
   networks:
     - custom_network
