@@ -37,12 +37,12 @@ async def send_failure_notifications(client: AsyncClient, message: BaseModel):
         )
 
 
-# --- Configuration ---
-REDIS_HOST = settings.redis.host  # Assuming you have settings imported
+
+REDIS_HOST = settings.redis.host
 REDIS_PORT = settings.redis.port
-REDIS_PASSWORD = settings.redis.password  # Handle optional password
-MAX_AGE_SECONDS = 300  # How old can the timestamp be before considered unhealthy?
-# ---------------------
+REDIS_PASSWORD = settings.redis.password
+MAX_AGE_SECONDS = 300
+
 
 
 async def check_health(hostname_to_check: str) -> bool:
@@ -88,10 +88,7 @@ async def check_health(hostname_to_check: str) -> bool:
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        # If no hostname argument, try getting current hostname (useful for direct execution)
         hostname_arg = socket.gethostname()
-        # If running via Docker healthcheck, the hostname should be passed explicitly.
-        # If still no arg, it's an error in how the script is called by the healthcheck.
         if not hostname_arg:
             print('Usage: python health_ping.py <hostname_to_check>', file=sys.stderr)
             print('Error: Hostname argument is required for Docker healthcheck.', file=sys.stderr)
