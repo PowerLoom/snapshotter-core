@@ -7,9 +7,6 @@ from async_limits.storage import AsyncRedisStorage
 from async_limits.strategies import AsyncFixedWindowRateLimiter
 from redis import asyncio as aioredis
 
-from snapshotter.settings.config import settings
-from snapshotter.utils.exceptions import RPCException
-
 # Initialize rate limits when program starts
 LUA_SCRIPT_SHAS = None
 
@@ -122,66 +119,3 @@ async def generic_rate_limiter(
             raise Exception from exc
     return True, 0, ''
 
-
-async def check_rpc_rate_limit(
-    parsed_limits: list,
-    app_id,
-    redis_conn: aioredis.Redis,
-    request_payload,
-    error_msg,
-    logger,
-    rate_limit_lua_script_shas=None,
-    limit_incr_by=1,
-):
-    """
-    Check if the RPC rate limit has been exceeded for the given app_id and request_payload.
-
-    Args:
-        parsed_limits (list): List of parsed rate limit configurations.
-        app_id (str): The ID of the app making the request.
-        redis_conn (aioredis.Redis): The Redis connection object.
-        request_payload (dict): The payload of the request.
-        error_msg (str): The error message to include in the RPCException if the rate limit is exceeded.
-        logger (Logger): The logger object.
-        rate_limit_lua_script_shas (dict, optional): A dictionary of Lua script SHA1 hashes for rate limiting.
-        limit_incr_by (int, optional): The amount to increment the rate limit by. Defaults to 1.
-
-    Returns:
-        bool: True if the rate limit has not been exceeded, False otherwise.
-
-    Raises:
-        RPCException: If the rate limit has been exceeded.
-        Exception: If there's an error with rate limiter operations.
-    """
-    key_bits = [
-        app_id,
-        'eth_call',
-    ]  # TODO: add unique elements that can identify a request
-    try:
-        can_request, retry_after, violated_limit = await generic_rate_limiter(
-            parsed_limits,
-            key_bits,
-            redis_conn,
-            rate_limit_lua_script_shas,
-            limit_incr_by,
-        )
-    except Exception as exc:
-        logger.opt(exception=settings.logs.debug_mode).error(
-            (
-                'Caught exception on rate limiter operations: {} | Bypassing'
-                ' rate limit check '
-            ),
-            exc,
-        )
-        raise
-
-    if not can_request:
-        exc = RPCException(
-            request=request_payload,
-            response={},
-            underlying_exception=None,
-            extra_info=error_msg,
-        )
-        logger.trace('Rate limit hit, raising exception {}', str(exc))
-        raise exc
-    return can_request

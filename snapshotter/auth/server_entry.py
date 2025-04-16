@@ -9,7 +9,7 @@ from redis import asyncio as aioredis
 from snapshotter.auth.helpers.data_models import AddApiKeyRequest
 from snapshotter.auth.helpers.data_models import AppOwnerModel
 from snapshotter.auth.helpers.data_models import UserAllDetailsResponse
-from snapshotter.auth.helpers.redis_conn import RedisPoolCache
+from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.auth.helpers.redis_keys import all_users_set
 from snapshotter.auth.helpers.redis_keys import api_key_to_owner_key
 from snapshotter.auth.helpers.redis_keys import user_active_api_keys_set
