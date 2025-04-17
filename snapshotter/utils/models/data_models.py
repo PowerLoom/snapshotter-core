@@ -367,10 +367,15 @@ class SnapshotBatchSubmittedEvent(EventBase):
     transactionHash: str
 
 
-class TelegramEpochProcessingReportMessage(BaseModel):
-    """
-    Message model for Telegram epoch processing report.
-    """
+class TelegramMessage(BaseModel):
     chatId: str
     slotId: int
+
+
+class TelegramEpochProcessingReportMessage(TelegramMessage):
     issue: SnapshotterIssue
+
+
+class TelegramSnapshotterReportMessage(TelegramMessage):
+    issue: SnapshotterIssue
+    status: SnapshotterStatus
