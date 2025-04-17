@@ -1,6 +1,5 @@
 import asyncio
 import importlib
-import json
 import resource
 import threading
 import time
@@ -19,11 +18,8 @@ from pydantic import ValidationError
 
 from snapshotter.settings.config import projects_config
 from snapshotter.settings.config import settings
-from snapshotter.utils.callback_helpers import send_failure_notifications_async
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.generic_worker import GenericAsyncWorker
-from snapshotter.utils.models.data_models import SnapshotterIssue
-from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
 from snapshotter.utils.models.data_models import SnapshotterStateUpdate
 from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMessage
@@ -150,6 +146,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     ).json(),
                 },
             )
+            await self._send_failure_notifications(error=e, epoch_id=msg_obj.epochId, project_id=project_id)
         else:
             # Handle successful snapshot processing
             p = self._redis_conn.pipeline()
@@ -246,6 +243,7 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                     ).json(),
                 },
             )
+            await self._send_failure_notifications(error=e, epoch_id=msg_obj.epochId, project_id="bulk_mode")
         else:
             # Handle successful bulk snapshot processing
             await self._redis_conn.set(

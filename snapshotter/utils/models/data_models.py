@@ -236,16 +236,6 @@ class ProjectStatus(BaseModel):
     missedSubmissions: int = 0
 
 
-class SnapshotterStatus(BaseModel):
-    """
-    Overall status of a snapshotter.
-    """
-    totalSuccessfulSubmissions: int = 0
-    totalIncorrectSubmissions: int = 0
-    totalMissedSubmissions: int = 0
-    projects: List[ProjectStatus]
-
-
 class SnapshotterMissedSubmission(BaseModel):
     """
     Details of a missed submission by a snapshotter.
@@ -378,4 +368,3 @@ class TelegramEpochProcessingReportMessage(TelegramMessage):
 
 class TelegramSnapshotterReportMessage(TelegramMessage):
     issue: SnapshotterIssue
-    status: SnapshotterStatus
