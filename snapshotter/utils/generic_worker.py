@@ -687,6 +687,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                 await send_telegram_notification_async(
                     client=self._telegram_httpx_client,
                     message=telegram_message,
+                    redis_conn=self._redis_conn,
                 )
 
                 self._last_notification_time = int(time.time())
