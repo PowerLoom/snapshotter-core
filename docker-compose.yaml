@@ -42,6 +42,8 @@ x-snapshotter-base: &snapshotter-base
     - IPFS_S3_CONFIG_BUCKET_NAME
     - IPFS_S3_CONFIG_ACCESS_KEY
     - IPFS_S3_CONFIG_SECRET_KEY
+    - IPFS_UNPINNING_ENABLED=${IPFS_UNPINNING_ENABLED:-false}
+    - IPFS_UNPINNING_AFTER=${IPFS_UNPINNING_AFTER:-86400}
   extra_hosts:
     - "host.docker.internal:host-gateway"
   restart: unless-stopped

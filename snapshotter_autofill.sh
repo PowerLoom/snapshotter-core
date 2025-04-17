@@ -174,4 +174,13 @@ else
     sed -i'.backup' "s#\"redis-password\"#null#" config/auth_settings.json
 fi
 
+if [ "$IPFS_UNPINNING_ENABLED" = "true" ]; then
+    sed -i'.backup' "s#\"ipfs-unpinning-enabled\"#true#" config/settings.json
+else
+    sed -i'.backup' "s#\"ipfs-unpinning-enabled\"#false#" config/settings.json
+fi
+
+sed -i'.backup' "s#\"ipfs-unpin-after\"#$IPFS_UNPINNING_AFTER#" config/settings.json
+
+
 echo 'settings has been populated!'

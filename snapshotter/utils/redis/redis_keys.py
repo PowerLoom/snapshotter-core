@@ -153,6 +153,16 @@ def project_missed_snapshot_submissions_suffix():
     return 'totalMissedSnapshotCount'
 
 
+def unpinned_snapshots_zset_name():
+    """
+    Generate Redis key for unpinned snapshots zset.
+
+    Returns:
+        str: Redis key for the unpinned snapshots zset.
+    """
+    return 'snapshotsToUnpin'
+
+
 def project_snapshotter_status_report_key(project_id):
     """
     Generate Redis key for project's snapshotter status report.

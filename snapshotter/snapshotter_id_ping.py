@@ -3,9 +3,9 @@ import sys
 
 from web3 import Web3
 
-from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.settings.config import settings
 from snapshotter.utils.file_utils import read_json_file
+from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import active_status_key
 from snapshotter.utils.rpc import RpcHelper
 

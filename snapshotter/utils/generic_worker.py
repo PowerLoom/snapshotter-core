@@ -59,6 +59,7 @@ from snapshotter.utils.models.proto.snapshot_submission.submission_pb2 import Sn
 from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import epoch_id_project_to_state_mapping
 from snapshotter.utils.redis.redis_keys import submitted_unfinalized_snapshot_cids
+from snapshotter.utils.redis.redis_keys import unpinned_snapshots_zset_name
 from snapshotter.utils.rpc import RpcHelper
 
 logger = default_logger.bind(module='GenericWorker')
@@ -220,6 +221,12 @@ class GenericAsyncWorker(multiprocessing.Process):
             str: The CID of the uploaded snapshot.
         """
         snapshot_cid = await _ipfs_writer_client.add_bytes(snapshot)
+        if settings.ipfs_unpinning.enabled:
+            # add to redis zset of unpinned snapshots
+            await self._redis_conn.zadd(
+                name=unpinned_snapshots_zset_name(),
+                mapping={snapshot_cid: time.time() + settings.ipfs_unpinning.unpin_after},
+            )
         return snapshot_cid
 
     async def generate_signature(self, snapshot_cid, epoch_id, project_id, slot_id=None, private_key=None):

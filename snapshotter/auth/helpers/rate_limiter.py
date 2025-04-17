@@ -118,4 +118,3 @@ async def generic_rate_limiter(
         ) as exc:
             raise Exception from exc
     return True, 0, ''
-
