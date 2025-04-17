@@ -218,7 +218,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             # add to redis zset of unpinned snapshots
             await self._redis_conn.zadd(
                 name=unpinned_snapshots_zset_name(),
-                mapping={snapshot_cid: time.time() + settings.ipfs_unpinning.unpin_after},
+                mapping={snapshot_cid: int(time.time()) + settings.ipfs_unpinning.unpin_after},
             )
         return snapshot_cid
 
