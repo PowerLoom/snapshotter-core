@@ -112,8 +112,6 @@ class EventDetectorProcess(multiprocessing.Process):
         self._logger = None
         self.contract_address = settings.protocol_state.address
 
-        self._last_reporting_service_ping = 0
-        self._last_reporting_message_sent = 0
         self._simulation_completed = False
 
     async def _wait_for_simulation_completion(self):

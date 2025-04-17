@@ -139,22 +139,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
                 'sending failure notifications', msg_obj, e,
             )
 
-            # Prepare and send failure notification
-            notification_message = SnapshotterIssue(
-                instanceID=settings.instance_id,
-                issueType=SnapshotterReportState.MISSED_SNAPSHOT.value,
-                projectID=project_id,
-                epochId=str(msg_obj.epochId),
-                timeOfReporting=str(time.time()),
-                extra=json.dumps({'issueDetails': f'Error : {e}'}),
-            )
-
-            await send_failure_notifications_async(
-                client=self._client,
-                message=notification_message,
-                redis_conn=self._redis_conn,
-            )
-
             # Update Redis with failure state
             await self._redis_conn.hset(
                 name=epoch_id_project_to_state_mapping(
@@ -249,22 +233,6 @@ class SnapshotAsyncWorker(GenericAsyncWorker):
             self._logger.opt(exception=settings.logs.debug_mode).error(
                 'Exception processing callback for epoch: {}, Error: {},'
                 'sending failure notifications', msg_obj, e,
-            )
-
-            # Prepare and send failure notification
-            notification_message = SnapshotterIssue(
-                instanceID=settings.instance_id,
-                issueType=SnapshotterReportState.MISSED_SNAPSHOT.value,
-                projectID=f'{task_type}:{settings.namespace}',
-                epochId=str(msg_obj.epochId),
-                timeOfReporting=str(time.time()),
-                extra=json.dumps({'issueDetails': f'Error : {e}'}),
-            )
-
-            await send_failure_notifications_async(
-                client=self._client,
-                message=notification_message,
-                redis_conn=self._redis_conn,
             )
 
             # Update Redis with failure state

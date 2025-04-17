@@ -298,19 +298,6 @@ class GenericAsyncWorker(multiprocessing.Process):
                 'Exception uploading snapshot to IPFS for epoch {}: {}, Error: {},'
                 'sending failure notifications', epoch, snapshot, e,
             )
-            notification_message = SnapshotterIssue(
-                instanceID=settings.instance_id,
-                issueType=SnapshotterReportState.MISSED_SNAPSHOT.value,
-                projectID=project_id,
-                epochId=str(epoch.epochId),
-                timeOfReporting=str(time.time()),
-                extra=json.dumps({'issueDetails': f'Error : {e}'}),
-            )
-            await send_failure_notifications_async(
-                client=self._client,
-                message=notification_message,
-                redis_conn=self._redis_conn,
-            )
         else:
             # Add to zset of unfinalized snapshot CIDs
             unfinalized_entry = UnfinalizedSnapshot(
