@@ -26,12 +26,12 @@ from snapshotter.utils.rpc import RpcHelper
 helper_logger = default_logger.bind(module='Callback|Helpers')
 
 
-def misc_notification_callback_result_handler(fut: asyncio.Future):
+def misc_notification_callback_result_handler(fut: asyncio.Task):
     """
-    Handles the result of a callback or notification.
+    Handles the result of a callback or notification task.
 
     Args:
-        fut (asyncio.Future): The future object representing the callback or notification.
+        fut (asyncio.Task): The task object representing the callback or notification.
 
     Returns:
         None
@@ -117,7 +117,7 @@ async def send_telegram_notification_async(
         else:
             # Set the timestamp for the current notification if not found
             # We don't await this specifically, let it run in the background
-            asyncio.ensure_future(
+            asyncio.create_task(
                 redis_conn.set(
                     name=callback_last_sent_by_issue(issue_type),
                     value=time_of_reporting,
@@ -135,7 +135,7 @@ async def send_telegram_notification_async(
         )
         return
 
-    f = asyncio.ensure_future(
+    f = asyncio.create_task(
         client.post(
             url=urljoin(settings.reporting.telegram_url, endpoint),
             json=message.dict(),
