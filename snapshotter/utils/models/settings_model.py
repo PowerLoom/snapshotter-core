@@ -163,6 +163,12 @@ class HTTPXConfig(BaseModel):
     write_timeout: int
 
 
+class IPFSUnpinningConfig(BaseModel):
+    """IPFS unpinning configuration model."""
+    enabled: bool
+    unpin_after: int
+
+
 class Settings(BaseModel):
     """Main settings configuration model."""
     namespace: str
@@ -186,11 +192,12 @@ class Settings(BaseModel):
     protocol_state: EventContract
     callback_worker_config: CallbackWorkerConfig
     ipfs: IPFSConfig
+    ipfs_unpinning: IPFSUnpinningConfig
     node_version: str
     anchor_chain_rpc: RPCConfigBase
 
-
 # Projects related models
+
 
 class ProcessorConfig(BaseModel):
     """Processor configuration model."""

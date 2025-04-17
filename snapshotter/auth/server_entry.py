@@ -9,7 +9,6 @@ from redis import asyncio as aioredis
 from snapshotter.auth.helpers.data_models import AddApiKeyRequest
 from snapshotter.auth.helpers.data_models import AppOwnerModel
 from snapshotter.auth.helpers.data_models import UserAllDetailsResponse
-from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.auth.helpers.redis_keys import all_users_set
 from snapshotter.auth.helpers.redis_keys import api_key_to_owner_key
 from snapshotter.auth.helpers.redis_keys import user_active_api_keys_set
@@ -17,6 +16,7 @@ from snapshotter.auth.helpers.redis_keys import user_details_htable
 from snapshotter.auth.helpers.redis_keys import user_revoked_api_keys_set
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
+from snapshotter.utils.redis.redis_conn import RedisPoolCache
 
 # Setup logging
 api_logger = default_logger.bind(module='AuthAPI')

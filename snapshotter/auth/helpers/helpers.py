@@ -12,10 +12,10 @@ from snapshotter.auth.helpers.data_models import AppOwnerModel
 from snapshotter.auth.helpers.data_models import AuthCheck
 from snapshotter.auth.helpers.data_models import RateLimitAuthCheck
 from snapshotter.auth.helpers.data_models import UserStatusEnum
+from snapshotter.auth.helpers.rate_limiter import generic_rate_limiter
 from snapshotter.auth.helpers.redis_keys import api_key_to_owner_key
 from snapshotter.auth.helpers.redis_keys import user_active_api_keys_set
 from snapshotter.auth.helpers.redis_keys import user_details_htable
-from snapshotter.auth.helpers.rate_limiter import generic_rate_limiter
 
 
 async def incr_success_calls_count(
