@@ -682,7 +682,6 @@ class GenericAsyncWorker(multiprocessing.Process):
                     chatId=settings.reporting.telegram_chat_id,
                     slotId=settings.slot_id,
                     issue=notification_message,
-                    status=self._status,
                 )
 
                 await send_telegram_notification_async(
