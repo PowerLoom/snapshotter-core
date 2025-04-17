@@ -125,7 +125,7 @@ class EventDetectorProcess(multiprocessing.Process):
 
         # Initialize reporting and notification related attributes
         self._telegram_httpx_client = None
-        self.notification_cooldown = settings.reporting.notification_cooldown
+        self.notification_cooldown = settings.reporting.min_reporting_interval
         self.last_notification_time = 0
 
     async def _wait_for_simulation_completion(self):
