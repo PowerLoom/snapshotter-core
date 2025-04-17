@@ -129,6 +129,11 @@ services:
       - processor-distributor
     deploy:
       replicas: ${AGGREGATION_WORKER_REPLICAS:-6}
+  ipfs-unpinning-worker:
+    <<: *snapshotter-base
+    command: bash -c "bash init_processes.sh utils.ipfs_unpinning_worker"
+    depends_on:
+      - ipfs
   # Core API Service
   core-api:
     <<: *snapshotter-base
