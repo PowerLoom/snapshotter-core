@@ -366,5 +366,5 @@ class TelegramEpochProcessingReportMessage(TelegramMessage):
     issue: SnapshotterIssue
 
 
-class TelegramSnapshotterReportMessage(TelegramMessage):
+class TelegramSnapshotterCoreReportMessage(TelegramMessage):
     issue: SnapshotterIssue

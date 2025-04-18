@@ -47,7 +47,7 @@ from snapshotter.utils.models.data_models import SnapshotterIssue
 from snapshotter.utils.models.data_models import SnapshotterReportState
 from snapshotter.utils.models.data_models import SnapshotterStates
 from snapshotter.utils.models.data_models import SnapshotterStateUpdate
-from snapshotter.utils.models.data_models import TelegramSnapshotterReportMessage
+from snapshotter.utils.models.data_models import TelegramSnapshotterCoreReportMessage
 from snapshotter.utils.models.data_models import UnfinalizedSnapshot
 from snapshotter.utils.models.message_models import AggregateBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
@@ -661,7 +661,7 @@ class GenericAsyncWorker(multiprocessing.Process):
             epoch_id (str): The ID of the epoch that missed the snapshot.
             project_id (str): The ID of the project that missed the snapshot.
         """
-        if (int(time.time()) - self._last_notification_time) >= self.notification_cooldown and \
+        if (int(time.time()) - self._last_notification_time) >= self._notification_cooldown and \
             (settings.reporting.telegram_url and settings.reporting.telegram_chat_id):
 
             if not self._telegram_httpx_client:
@@ -678,7 +678,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                     extra=json.dumps({'issueDetails': f'Error : {error}'}),
                 )
 
-                telegram_message = TelegramSnapshotterReportMessage(
+                telegram_message = TelegramSnapshotterCoreReportMessage(
                     chatId=settings.reporting.telegram_chat_id,
                     slotId=settings.slot_id,
                     issue=notification_message,
