@@ -7,6 +7,7 @@ from typing import Union
 from urllib.parse import urljoin
 
 from httpx import AsyncClient
+from httpx import Client as SyncClient
 from ipfs_client.main import AsyncIPFSClient
 from pydantic import BaseModel
 from redis import asyncio as aioredis
@@ -14,7 +15,7 @@ from redis import asyncio as aioredis
 from snapshotter.settings.config import settings
 from snapshotter.utils.default_logger import default_logger
 from snapshotter.utils.models.data_models import TelegramEpochProcessingReportMessage
-from snapshotter.utils.models.data_models import TelegramSnapshotterReportMessage
+from snapshotter.utils.models.data_models import TelegramSnapshotterCoreReportMessage
 from snapshotter.utils.models.message_models import EpochBase
 from snapshotter.utils.models.message_models import PowerloomCalculateAggregateMessage
 from snapshotter.utils.models.message_models import PowerloomSnapshotProcessMessage
@@ -76,7 +77,7 @@ def sync_notification_callback_result_handler(f: functools.partial):
 
 async def send_telegram_notification_async(
     client: AsyncClient,
-    message: Union[TelegramEpochProcessingReportMessage, TelegramSnapshotterReportMessage],
+    message: Union[TelegramEpochProcessingReportMessage, TelegramSnapshotterCoreReportMessage],
     redis_conn: aioredis.Redis,
 ):
     """
@@ -87,7 +88,7 @@ async def send_telegram_notification_async(
 
     Args:
         client (AsyncClient): The async HTTP client to use for sending notifications.
-        message (Union[TelegramEpochProcessingReportMessage, TelegramSnapshotterReportMessage]): The message to send as a Telegram notification.
+        message (Union[TelegramEpochProcessingReportMessage, TelegramSnapshotterCoreReportMessage]): The message to send as a Telegram notification.
         redis_conn (aioredis.Redis): Redis connection for rate limiting.
 
     Returns:
@@ -100,7 +101,7 @@ async def send_telegram_notification_async(
     # Check if the last notification was sent within the minimum reporting interval
     issue_type = None
     time_of_reporting = None
-    if isinstance(message, TelegramEpochProcessingReportMessage) or isinstance(message, TelegramSnapshotterReportMessage):
+    if isinstance(message, TelegramEpochProcessingReportMessage) or isinstance(message, TelegramSnapshotterCoreReportMessage):
         issue_type = message.issue.issueType
         time_of_reporting = message.issue.timeOfReporting
 
@@ -127,8 +128,8 @@ async def send_telegram_notification_async(
 
     if isinstance(message, TelegramEpochProcessingReportMessage):
         endpoint = '/reportEpochProcessingIssue'
-    elif isinstance(message, TelegramSnapshotterReportMessage):
-        endpoint = '/reportSnapshotIssue'
+    elif isinstance(message, TelegramSnapshotterCoreReportMessage):
+        endpoint = '/reportSnapshotterCoreIssue'
     else:
         helper_logger.error(
             f'Unsupported telegram message type: {type(message)} - message not sent',
@@ -143,6 +144,48 @@ async def send_telegram_notification_async(
     )
     f.add_done_callback(misc_notification_callback_result_handler)
 
+
+def send_telegram_notification_sync(
+    client: SyncClient,
+    message: Union[TelegramEpochProcessingReportMessage, TelegramSnapshotterCoreReportMessage],
+):
+    """
+    Sends a synchronous Telegram notification for reporting issues using the sync_notification_callback_result_handler.
+
+    This function checks if Telegram reporting is configured, determines the correct endpoint,
+    and then delegates the actual HTTP POST call and result/exception handling to
+    sync_notification_callback_result_handler.
+    Rate limiting is NOT handled by this function and should be implemented by the caller if needed.
+
+    Args:
+        client (SyncClient): The sync HTTP client to use for sending notifications.
+        message (Union[TelegramEpochProcessingReportMessage, TelegramSnapshotterCoreReportMessage]): The message to send as a Telegram notification.
+
+    Returns:
+        None
+    """
+
+    if not settings.reporting.telegram_url or not settings.reporting.telegram_chat_id:
+        helper_logger.debug('Telegram reporting not configured, skipping notification.')
+        return
+
+    if isinstance(message, TelegramEpochProcessingReportMessage):
+        endpoint = '/reportEpochProcessingIssue'
+    elif isinstance(message, TelegramSnapshotterCoreReportMessage):
+        endpoint = '/reportSnapshotterCoreIssue'
+    else:
+        helper_logger.error(
+            f'Unsupported telegram message type: {type(message)} - message not sent',
+        )
+        return
+
+    f = functools.partial(
+        client.post,
+        url=urljoin(settings.reporting.telegram_url, endpoint),
+        json=message.dict(),
+    )
+
+    sync_notification_callback_result_handler(f)
 
 class GenericProcessorSnapshot(ABC):
     """

@@ -16,7 +16,7 @@ from snapshotter.utils.redis.redis_keys import callback_last_sent_by_issue
 from snapshotter.utils.callback_helpers import send_telegram_notification_async
 from snapshotter.utils.models.data_models import (
     TelegramEpochProcessingReportMessage,
-    TelegramSnapshotterReportMessage,
+    TelegramSnapshotterCoreReportMessage,
 )
 
 # Configure logging
@@ -66,7 +66,7 @@ EPOCH_MESSAGE = TelegramEpochProcessingReportMessage(
     issue=SAMPLE_ISSUE
 )
 
-SNAPSHOTTER_MESSAGE = TelegramSnapshotterReportMessage(
+SNAPSHOTTER_MESSAGE = TelegramSnapshotterCoreReportMessage(
     chatId='chat123',
     slotId=456,
     issue=SAMPLE_ISSUE
