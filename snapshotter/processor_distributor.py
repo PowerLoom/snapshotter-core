@@ -430,7 +430,7 @@ class ProcessorDistributor(multiprocessing.Process):
                     self._distribute_callbacks_snapshotting(
                         project_type, msg_obj,
                     ),
-                    name=f"distribute_snapshotting_{project_type}_epoch_{msg_obj.epochId}"
+                    name=f'distribute_snapshotting_{project_type}_epoch_{msg_obj.epochId}'
                 )
                 task_tuple = (current_time, task)
                 self._active_tasks.add(task_tuple)
@@ -442,7 +442,7 @@ class ProcessorDistributor(multiprocessing.Process):
             self._preloader_waiter(
                 epoch=msg_obj,
             ),
-            name=f"preloader_waiter_epoch_{msg_obj.epochId}"
+            name=f'preloader_waiter_epoch_{msg_obj.epochId}'
         )
         preloader_task_tuple = (current_time, preloader_task)
         self._active_tasks.add(preloader_task_tuple)
@@ -463,7 +463,7 @@ class ProcessorDistributor(multiprocessing.Process):
         current_time = time.time()
         task = asyncio.create_task(
             self._exec_preloaders(msg_obj=msg_obj),
-            name=f"exec_preloaders_epoch_{msg_obj.epochId}"
+            name=f'exec_preloaders_epoch_{msg_obj.epochId}'
         )
         task_tuple = (current_time, task)
         self._active_tasks.add(task_tuple)
@@ -851,7 +851,7 @@ class ProcessorDistributor(multiprocessing.Process):
             current_time = time.time()
             task = asyncio.create_task(
                 self._cleanup_older_epoch_status(epoch_msg.epochId),
-                name=f"cleanup_epoch_{epoch_msg.epochId - 30}"
+                name=f'cleanup_epoch_{epoch_msg.epochId - 30}'
             )
             task_tuple = (current_time, task)
             self._active_tasks.add(task_tuple)
@@ -930,7 +930,7 @@ class ProcessorDistributor(multiprocessing.Process):
             self._logger.warning(f"Task '{task_name}' was cancelled.")
         except Exception as e:
             # Catch potential errors within the callback itself
-            self._logger.error(f"Error in task result handler: {e}", exc_info=e)
+            self._logger.error(f'Error in task result handler: {e}', exc_info=e)
         finally:
             # Ensure cleanup happens even if the callback logic has an error
             self._active_tasks.discard(task_tuple)

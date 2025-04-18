@@ -693,7 +693,7 @@ class GenericAsyncWorker(multiprocessing.Process):
                 self._last_notification_time = int(time.time())
 
             except Exception as e:
-                self._logger.error(f"Error sending failure notifications: {e}")
+                self._logger.error(f'Error sending failure notifications: {e}')
 
     async def _cleanup_tasks(self):
         """
