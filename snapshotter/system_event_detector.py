@@ -9,8 +9,8 @@ from functools import wraps
 from signal import SIGINT
 from signal import SIGQUIT
 from signal import SIGTERM
-from typing import Union
 from socket import gethostname
+from typing import Union
 
 import dramatiq
 from dramatiq.brokers.redis import RedisBroker
@@ -139,6 +139,8 @@ class EventDetectorProcess(multiprocessing.Process):
         """
         while True:
             self._logger.info('Waiting for simulation completion...')
+            if int(time.time()) - self._last_health_report_timestamp >= self._health_report_interval:
+                await self.report_health_status()
             await asyncio.sleep(30)
 
     async def init(self):

@@ -53,7 +53,7 @@ x-snapshotter-base: &snapshotter-base
     interval: 30s
     timeout: 10s
     retries: 3
-    start_period: 60s # Give container time to start and report first health status
+    start_period: 120s # Give container time to start and report first health status
   restart: unless-stopped
   networks:
     - custom_network
@@ -152,6 +152,12 @@ services:
     command: bash -c "bash init_processes.sh gunicorn_core_launcher"
     depends_on:
       - system-event-detector
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:${CORE_API_PORT:-8002}/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
   # IPFS Service with improved configuration
   ipfs:
     image: ipfs/kubo:master-latest
