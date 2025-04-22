@@ -43,6 +43,9 @@ epoch_process_report_cached_key = 'epochProcessReport'
 # Redis key for snapshotter active status
 active_status_key = f'snapshotterActiveStatus:{settings.namespace}'
 
+# Redis key for service health timestamps
+service_health_timestamps_key = f'service:health:timestamps'
+
 
 def project_finalized_data_zset(project_id):
     """

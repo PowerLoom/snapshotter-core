@@ -10,6 +10,7 @@ from signal import SIGINT
 from signal import SIGQUIT
 from signal import SIGTERM
 from typing import Union
+from socket import gethostname
 
 import dramatiq
 from dramatiq.brokers.redis import RedisBroker
@@ -35,6 +36,7 @@ from snapshotter.utils.redis.redis_conn import RedisPoolCache
 from snapshotter.utils.redis.redis_keys import event_detector_last_processed_block
 from snapshotter.utils.redis.redis_keys import last_epoch_detected_epoch_id_key
 from snapshotter.utils.redis.redis_keys import last_epoch_detected_timestamp_key
+from snapshotter.utils.redis.redis_keys import service_health_timestamps_key
 from snapshotter.utils.rpc import get_event_sig_and_abi
 from snapshotter.utils.rpc import RpcHelper
 
@@ -122,6 +124,9 @@ class EventDetectorProcess(multiprocessing.Process):
         self.contract_address = settings.protocol_state.address
 
         self._simulation_completed = False
+        self._hostname = gethostname()
+        self._health_report_interval = settings.health_report_interval
+        self._last_health_report_timestamp = 0
 
         # Initialize reporting and notification related attributes
         self._telegram_httpx_client = None
@@ -431,6 +436,10 @@ class EventDetectorProcess(multiprocessing.Process):
                 'Sleeping for {} seconds...',
                 settings.rpc.polling_interval,
             )
+
+            if int(time.time()) - self._last_health_report_timestamp >= self._health_report_interval:
+                await self.report_health_status()
+
             await asyncio.sleep(settings.rpc.polling_interval)
 
     async def _init_rpc(self):
@@ -506,6 +515,23 @@ class EventDetectorProcess(multiprocessing.Process):
                 self.last_notification_time = int(time.time())
             except Exception as e:
                 self._logger.error('Error sending Telegram notification: {}', e)
+
+    async def report_health_status(self):
+        """Reports the current timestamp for this container's hostname to Redis."""
+        if not hasattr(self, '_redis_conn') or self._redis_conn is None:
+            self._logger.warning('Redis connection not initialized, skipping health report.')
+            return
+        try:
+            current_timestamp = int(time.time())
+            await self._redis_conn.hset(
+                service_health_timestamps_key,
+                self._hostname,
+                current_timestamp,
+            )
+            self._last_health_report_timestamp = int(time.time())
+            self._logger.debug(f'Reported health for {self._hostname} at {current_timestamp}')
+        except Exception as e:
+            self._logger.error(f'Failed to report health status for hostname {self._hostname}: {e}')
 
     @redis_cleanup
     def run(self):
